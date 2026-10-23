@@ -63,8 +63,8 @@ class ConversationStore:
                     db.execute("UPDATE chats SET title=? WHERE id=?",(title,chat_id))
         return {"id":ident}
 
-    def edit_message(self,chat_id,message_id,content,truncate_after=False):
-        """Edit a user turn. When resending, truncate the obsolete branch after it."""
+    def edit_message(self,chat_id,message_id,content,truncate_after=True):
+        """Edit a user turn and, by default, discard the obsolete branch after it."""
         content=str(content)
         if not content or len(content)>32768:raise ValueError("Message is empty or too large")
         with self.store.db() as db:
@@ -72,8 +72,7 @@ class ConversationStore:
             if not row:raise ValueError("Message not found")
             if row["role"]!="user":raise ValueError("Only user messages can be edited")
             db.execute("UPDATE chat_messages SET content=? WHERE id=? AND chat_id=?",(content,message_id,chat_id))
-            if truncate_after:
-                db.execute("DELETE FROM chat_messages WHERE chat_id=? AND rowid>?",(chat_id,row["rowid"]))
+            if truncate_after:db.execute("DELETE FROM chat_messages WHERE chat_id=? AND rowid>?",(chat_id,row["rowid"]))
             db.execute("UPDATE chats SET modified=? WHERE id=?",(now(),chat_id))
         return {"id":message_id,"content":content,"truncated":bool(truncate_after)}
 
