@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 from dataclasses import dataclass
 
 from .store import now, uid
@@ -73,11 +74,20 @@ def extract_memories(text: str) -> list[dict]:
     return output
 
 
+def _query_terms(text: str) -> list[str]:
+    return [value for value in re.findall(r"\w+", text.casefold(), flags=re.UNICODE) if len(value) > 1][:24]
+
+
+def _fts_query(text: str) -> str:
+    return " OR ".join('"' + value.replace('"', '""') + '"' for value in _query_terms(text))
+
+
 @dataclass
 class LocalMemory:
     store: object
 
     def __post_init__(self):
+        self._fts = False
         with self.store.db() as db:
             db.executescript(
                 """
@@ -91,43 +101,127 @@ class LocalMemory:
                   modified TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
+                CREATE INDEX IF NOT EXISTS idx_memories_modified ON memories(modified DESC);
                 """
             )
+            try:
+                db.executescript(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                      id UNINDEXED,
+                      kind UNINDEXED,
+                      value,
+                      tokenize='unicode61'
+                    );
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+                      INSERT INTO memories_fts(id,kind,value) VALUES(new.id,new.kind,new.value);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+                      DELETE FROM memories_fts WHERE id=old.id;
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF value,kind ON memories BEGIN
+                      DELETE FROM memories_fts WHERE id=old.id;
+                      INSERT INTO memories_fts(id,kind,value) VALUES(new.id,new.kind,new.value);
+                    END;
+                    """
+                )
+                source_count = int(db.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+                index_count = int(db.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0])
+                if source_count != index_count:
+                    db.execute("DELETE FROM memories_fts")
+                    db.execute("INSERT INTO memories_fts(id,kind,value) SELECT id,kind,value FROM memories")
+                self._fts = True
+            except sqlite3.OperationalError:
+                self._fts = False
 
     def remember_from_message(self, text: str) -> list[dict]:
         saved = []
         for item in extract_memories(text):
-            fingerprint = hashlib.sha256((item["kind"] + "\0" + item["value"].casefold()).encode()).hexdigest()
+            fingerprint = hashlib.sha256(
+                (item["kind"] + "\0" + item["value"].casefold()).encode()
+            ).hexdigest()
             with self.store.db() as db:
-                row = db.execute("SELECT * FROM memories WHERE fingerprint=?", (fingerprint,)).fetchone()
+                row = db.execute(
+                    "SELECT * FROM memories WHERE fingerprint=?", (fingerprint,)
+                ).fetchone()
                 if row:
-                    db.execute("UPDATE memories SET modified=? WHERE id=?", (now(), row["id"]))
+                    db.execute(
+                        "UPDATE memories SET modified=? WHERE id=?", (now(), row["id"])
+                    )
                     saved.append(dict(row))
                     continue
                 ident = uid()
                 db.execute(
                     "INSERT INTO memories VALUES(?,?,?,?,?,?,?)",
-                    (ident, item["kind"], item["value"], fingerprint, "auto:user-message", now(), now()),
+                    (
+                        ident,
+                        item["kind"],
+                        item["value"],
+                        fingerprint,
+                        "auto:user-message",
+                        now(),
+                        now(),
+                    ),
                 )
                 saved.append({"id": ident, **item, "source": "auto:user-message"})
         return saved
 
     def list(self) -> list[dict]:
         with self.store.db() as db:
-            return [dict(r) for r in db.execute("SELECT id,kind,value,source,created,modified FROM memories ORDER BY modified DESC")]
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT id,kind,value,source,created,modified FROM memories ORDER BY modified DESC"
+                )
+            ]
 
-    def relevant(self, query: str, limit: int = 6) -> list[dict]:
-        memories = self.list()
-        words = set(re.findall(r"\w+", query.casefold()))
+    def _fallback_relevant(self, query: str, limit: int) -> list[dict]:
+        # Bounded fallback preserves the old preference/project weighting without a
+        # full-table scan when FTS5 is unavailable or finds no lexical match.
+        with self.store.db() as db:
+            memories = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT id,kind,value,source,created,modified FROM memories ORDER BY modified DESC LIMIT 64"
+                )
+            ]
+        words = set(re.findall(r"\w+", query.casefold(), flags=re.UNICODE))
         scored = []
         for item in memories:
-            value_words = set(re.findall(r"\w+", item["value"].casefold()))
+            value_words = set(re.findall(r"\w+", item["value"].casefold(), flags=re.UNICODE))
             score = len(words & value_words)
             if item["kind"] in {"preferred_name", "preference", "project", "goal"}:
                 score += 1
             scored.append((score, item))
-        scored.sort(key=lambda x: (x[0], x[1]["modified"]), reverse=True)
-        return [item for score, item in scored[: max(1, min(limit, 12))] if score > 0]
+        scored.sort(key=lambda value: (value[0], value[1]["modified"]), reverse=True)
+        return [item for score, item in scored[:limit] if score > 0]
+
+    def relevant(self, query: str, limit: int = 6) -> list[dict]:
+        limit = max(1, min(int(limit), 12))
+        match = _fts_query(query)
+        if self._fts and match:
+            try:
+                with self.store.db() as db:
+                    rows = [
+                        dict(row)
+                        for row in db.execute(
+                            """
+                            SELECT m.id,m.kind,m.value,m.source,m.created,m.modified,
+                                   -bm25(memories_fts) AS relevance
+                            FROM memories_fts
+                            JOIN memories AS m ON m.id=memories_fts.id
+                            WHERE memories_fts MATCH ?
+                            ORDER BY bm25(memories_fts), m.modified DESC
+                            LIMIT ?
+                            """,
+                            (match, limit),
+                        )
+                    ]
+                if rows:
+                    return rows
+            except sqlite3.OperationalError:
+                self._fts = False
+        return self._fallback_relevant(query, limit)
 
     def delete(self, ident: str) -> bool:
         from .security import safe_id
