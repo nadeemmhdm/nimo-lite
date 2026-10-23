@@ -6,6 +6,7 @@ speed, not language quality. Run on the same hardware before and after performan
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import platform
@@ -14,6 +15,7 @@ import statistics
 import time
 from pathlib import Path
 
+import psutil
 import torch
 
 from .fast_inference import get_engine
@@ -28,9 +30,13 @@ def _sync(device: str) -> None:
         torch.mps.synchronize()
 
 
-def _rss_mb() -> float:
+def _peak_rss_mb() -> float:
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return float(value / 1024.0 if platform.system() != "Darwin" else value / (1024.0 * 1024.0))
+
+
+def _current_rss_mb() -> float:
+    return float(psutil.Process().memory_info().rss / (1024.0 * 1024.0))
 
 
 def _device() -> str:
@@ -84,11 +90,7 @@ def _uncached(model, prompt, steps: int, device: str) -> dict:
             sequence = torch.cat((sequence, token), dim=1)
     _sync(device)
     elapsed = time.perf_counter() - start
-    return {
-        "first_token_s": first,
-        "decode_tokens_per_s": steps / elapsed,
-        "elapsed_s": elapsed,
-    }
+    return {"first_token_s": first, "decode_tokens_per_s": steps / elapsed, "elapsed_s": elapsed}
 
 
 def _cached(model, prompt, steps: int, device: str) -> dict:
@@ -118,15 +120,7 @@ def _cached(model, prompt, steps: int, device: str) -> dict:
     }
 
 
-def run(
-    profile="small",
-    context=1024,
-    prompt_tokens=128,
-    new_tokens=24,
-    repeats=2,
-    threads=None,
-    quantization="none",
-) -> dict:
+def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats=2, threads=None, quantization="none") -> dict:
     device = _device()
     if threads and device == "cpu":
         os.environ["NIMO_INFERENCE_THREADS"] = str(max(1, int(threads)))
@@ -134,15 +128,16 @@ def run(
     torch.manual_seed(7)
     load_start = time.perf_counter()
     model = build_text_model(profile=profile, context=context, vocab_size=8000).to(device).eval()
+    original_parameters = model.parameter_count()
     selected_quantization = "fp32" if quantization == "none" else quantization
     if quantization != "none":
         model, selected_quantization = quantize_for_inference(model, quantization, device)
     engine = get_engine(model)
     _sync(device)
+    gc.collect()
     load_s = time.perf_counter() - load_start
-    prompt = torch.randint(
-        8, 7999, (1, min(prompt_tokens, context - new_tokens - 1)), device=device
-    )
+    steady_after_load_mb = _current_rss_mb()
+    prompt = torch.randint(8, 7999, (1, min(prompt_tokens, context - new_tokens - 1)), device=device)
     with torch.inference_mode():
         engine.reset()
         engine.prefill(prompt[0, : min(8, prompt.shape[1])].tolist())
@@ -153,37 +148,32 @@ def run(
     def median(key, rows):
         return statistics.median(float(item[key]) for item in rows)
 
+    gc.collect()
     result = {
-        "schema": 3,
+        "schema": 4,
         "note": "Runtime/tokenizer benchmark with Nimo random weights; not a language-quality benchmark.",
         "hardware": {
-            "platform": platform.platform(),
-            "python": platform.python_version(),
-            "torch": torch.__version__,
-            "cpu_count": os.cpu_count(),
-            "torch_threads": torch.get_num_threads(),
-            "device": device,
+            "platform": platform.platform(), "python": platform.python_version(), "torch": torch.__version__,
+            "cpu_count": os.cpu_count(), "torch_threads": torch.get_num_threads(), "device": device,
             "gpu": torch.cuda.get_device_name(0) if device == "cuda" else None,
         },
         "model": {
             "profile": profile,
-            "parameters": model.parameter_count(),
+            "parameters": int(getattr(model, "_nimo_parameter_count", original_parameters)),
             "context": context,
             "vocab_size": 8000,
             "requested_quantization": quantization,
             "selected_quantization": selected_quantization,
             "quantization_decision": getattr(model, "_nimo_quantization_decision", None),
         },
-        "workload": {
-            "prompt_tokens": int(prompt.shape[1]),
-            "new_tokens": new_tokens,
-            "repeats": repeats,
-        },
+        "workload": {"prompt_tokens": int(prompt.shape[1]), "new_tokens": new_tokens, "repeats": repeats},
         "model_load_s": load_s,
+        "steady_rss_after_load_mb": steady_after_load_mb,
+        "steady_rss_after_benchmark_mb": _current_rss_mb(),
         "tokenizer": _tokenizer_benchmark(repeats),
         "cached": {key: median(key, cached) for key in cached[0]},
         "uncached": {key: median(key, uncached) for key in uncached[0]},
-        "peak_rss_mb": _rss_mb(),
+        "peak_rss_mb": _peak_rss_mb(),
         "engine": "preallocated-kv-v1",
     }
     return result
@@ -197,22 +187,10 @@ def main() -> None:
     parser.add_argument("--new-tokens", type=int, default=24)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--threads", type=int)
-    parser.add_argument(
-        "--quantization",
-        default="none",
-        choices=("none", "auto", "fp32", "bf16", "fp16", "int8"),
-    )
+    parser.add_argument("--quantization", default="none", choices=("none", "auto", "fp32", "bf16", "fp16", "int8"))
     parser.add_argument("--output", default="benchmark-results.json")
     args = parser.parse_args()
-    result = run(
-        args.profile,
-        args.context,
-        args.prompt_tokens,
-        args.new_tokens,
-        args.repeats,
-        args.threads,
-        args.quantization,
-    )
+    result = run(args.profile, args.context, args.prompt_tokens, args.new_tokens, args.repeats, args.threads, args.quantization)
     text = json.dumps(result, indent=2, sort_keys=True)
     Path(args.output).write_text(text + "\n", encoding="utf-8")
     print(text)
