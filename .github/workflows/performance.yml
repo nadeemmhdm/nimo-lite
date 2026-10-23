@@ -15,9 +15,13 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install -e .
-      - name: Benchmark Nimo Small
-        run: python -m nimo.benchmark --profile small --context 1024 --prompt-tokens 128 --new-tokens 24 --repeats 2 --output benchmark-results.json
+      - name: Benchmark Nimo Small FP32
+        run: python -m nimo.benchmark --profile small --context 1024 --prompt-tokens 128 --new-tokens 24 --repeats 2 --quantization none --output benchmark-results.json
+      - name: Benchmark Nimo Small Auto quantization
+        run: python -m nimo.benchmark --profile small --context 1024 --prompt-tokens 128 --new-tokens 24 --repeats 2 --quantization auto --output benchmark-auto.json
       - uses: actions/upload-artifact@v4
         with:
           name: nimo-performance
-          path: benchmark-results.json
+          path: |
+            benchmark-results.json
+            benchmark-auto.json
