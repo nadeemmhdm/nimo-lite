@@ -57,10 +57,31 @@ class NimoVision(nn.Module):
         return self.head(self.features(x))
 
 
+class NimoIntent(nn.Module):
+    """Original randomly initialized linear classifier over bounded hashed Unicode features."""
+    def __init__(self, classes, features=2048):
+        super().__init__()
+        self.config = dict(classes=classes,features=features)
+        self.head = nn.Linear(features,classes)
+    def forward(self,x):
+        return self.head(x)
+
+
 def load_model(path):
     # Local managed files only; safe tensor unpickler prevents arbitrary pickle execution.
     checkpoint = torch.load(path,map_location='cpu',weights_only=True)
-    model = NimoLM(**checkpoint['architecture']) if checkpoint['task']=='text' else NimoVision(**checkpoint['architecture'])
+    constructors = {'text':NimoLM, 'image':NimoVision, 'intent':NimoIntent}
+    if checkpoint['task'] not in constructors:
+        raise ValueError('Unsupported checkpoint task')
+    architecture=checkpoint['architecture']
+    if checkpoint['task']=='text':
+        if not (16<=architecture.get('width',0)<=256 and architecture['width']%4==0 and 1<=architecture.get('layers',0)<=6 and 32<=architecture.get('context',0)<=512):
+            raise ValueError('Text architecture exceeds local safety bounds')
+    elif not 2<=architecture.get('classes',0)<=1000:
+        raise ValueError('Classifier architecture exceeds local safety bounds')
+    if checkpoint['task']=='intent' and architecture.get('features')!=2048:
+        raise ValueError('Unsupported intent feature size')
+    model = constructors[checkpoint['task']](**architecture)
     model.load_state_dict(checkpoint['model'])
     model.eval()
     return model, checkpoint

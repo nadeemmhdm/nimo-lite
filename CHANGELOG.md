@@ -2,6 +2,27 @@
 
 All notable project changes are documented here. Versions follow semantic versioning once the public API stabilizes.
 
+## 0.2.0 — Assistant starter and interface redesign
+
+### Added
+
+- Dark/light themes, local preference persistence, responsive mobile navigation, keyboard-friendly chat, and explicit answer-source labels.
+- Guided training steps, original starter-data loading, paginated/filterable review, guarded bulk approval, and clear experiment metrics.
+- Original trained 11-class NLP intent model with bounded authored assistant responses.
+- Real 80-epoch language-model starter experiment and 60-epoch intent experiment on 140 original CC0 examples, with full provenance and unedited generation probes.
+- Bounded offline model-bundle installation, checksum verification, separate immutable public reevaluation, and a detailed model card.
+
+### Changed
+
+- New language runs use answer-only targets and optional 256-byte context. Legacy checkpoint objectives remain resumable.
+- Larger dataset splits reserve approximately 10% each for validation/test within leakage groups.
+- Prior-training leakage checks include checksums when sample IDs change across reimport.
+- Knowledge retrieval ignores common English stop words to reduce irrelevant matches.
+
+### Verified
+
+- 26 Python tests and expanded dark/light/mobile browser checks. Linux CPU only; internal tiny-data results are not general capability evidence.
+
 ## 0.1.0 — Initial experimental source
 
 ### Added

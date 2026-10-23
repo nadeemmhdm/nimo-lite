@@ -1,13 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nimo-lite"
-version = "0.1.0"
-description = "Local-first experimental AI training workbench with original tiny models"
+version = "0.2.0"
+description = "Local-first personal AI workbench with original trainable models"
+readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "python-multipart>=0.0.18", "pillow>=10.4", "psutil>=6", "numpy>=1.26", "httpx>=0.27,<1", "torch>=2.5,<3"]
 
 [project.optional-dependencies]
@@ -18,7 +20,11 @@ video = ["opencv-python-headless>=4.10"]
 nimo-lite = "nimo.app:main"
 
 [tool.setuptools.package-data]
-nimo = ["static/*"]
+nimo = ["static/*", "resources/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["nimo*"]
+namespaces = false

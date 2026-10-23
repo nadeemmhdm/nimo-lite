@@ -38,12 +38,18 @@ Use Export Dataset to create a portable ZIP containing original and processed im
 
 Use per-sample and per-note Delete controls for routine removal. To reset all local state, stop the application and move the data directory aside before launching with a fresh directory. Existing checkpoints may retain learned information after sample deletion. SQL deletion is not forensic secure erasure.
 
-## Publishing the prepared source
+## Trained starter installation
 
-The intended GitHub repository is `nadeemmhdm/nemo-lite`. When your GitHub CLI has a valid authenticated session, run from the project directory:
+Download the starter ZIP from the repository release and verify SHA256SUMS. Install only a bundle you trust:
 
 ```bash
-gh repo create nadeemmhdm/nemo-lite --public --source=. --remote=origin --push
+python -m nimo.install nimo-lite-starter-v0.2.0.zip --data ./data
 ```
 
-Do this only after inspecting the staged/tracked files for private data. Never add `.venv`, `data`, tokens, or local model weights. The command creates a public source repository, not a model release or independently verified security certification.
+The local CLI accepts only fixed supported checkpoint member names, bounded expanded sizes, matching checksums, and safe-loadable models within architecture limits. It imports no training examples automatically. Public evaluation examples are stored separately for reevaluation. Installation changes active model versions and retains older versions for rollback. Stop training before installation.
+
+## Repository and releases
+
+The existing repository is `nadeemmhdm/nimo-lite`. Its private visibility is preserved. GitHub access is required for cloning and downloading release assets while private. Source licensing is MIT; repository visibility is a separate setting.
+
+The earlier `nemo-lite` name was not an accessible repository. Creation of a new repository is restricted by the connection, but the existing `nimo-lite` repository grants push access. Release availability is shown on its GitHub Releases page.

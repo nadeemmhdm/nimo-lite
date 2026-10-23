@@ -2,15 +2,17 @@
 
 ## Current foundation
 
-The first version trains tiny text and image-classification models locally. The default text chat mode retrieves saved notes verbatim with sources. It does not synthesize verified answers. Images can be manually annotated with multiple labels and boxes; only single-label classification has a training architecture.
+The first version trains tiny text and image-classification models locally. The default chat mode offers basic trained intent routing to allowlisted authored responses and retrieves saved notes with sources. Original language generation remains a separate experimental choice. It does not synthesize verified answers. Images can be manually annotated with multiple labels and boxes; only single-label classification has a training architecture.
 
 ## Next priorities
 
 - Dedicated immutable evaluation datasets and persistent split assignment across dataset growth.
+- Larger independent intent tests, calibrated rejection, and stronger out-of-scope detection.
 - Better multilingual sequence construction, held-out instruction benchmarks, and longer context within measured memory budgets.
 - OCR architecture, detector training, captioning, and visual question answering, each independently evaluated.
 - Validation of code examples inside an OS-enforced sandbox; currently code is stored and trained as text only.
 - Multi-source search and explicit document approval with more complete provenance.
+- Stronger source authentication for distributed model bundles.
 - Better poisoning review, near-duplicate methods, conflict resolution, and optional malware scanning.
 - Hard OS resource quotas, per-worker restricted credentials, export streaming, encrypted backup, and data retention controls.
 - Calibrated classifier confidence, independent external tests, and task-specific regression gates.

@@ -30,12 +30,13 @@ def split_samples(rows, task):
     buckets = {}
     for group in groups.values():
         labels = {r['content']['labels'][0] for r in group if r['content'].get('labels')}
-        key = tuple(sorted(labels)) if task=='image' else ('text',)
+        key = tuple(sorted(labels)) if task=='image' else tuple(sorted({r['content']['category'] for r in group})) if task=='intent' else ('text',)
         buckets.setdefault(key,[]).append(group)
     result = dict(train=[], validation=[], test=[])
     for key,groups in sorted(buckets.items()):
         groups.sort(key=lambda g:hashlib.sha256(g[0]['checksum'].encode()).hexdigest())
+        heldout = max(1,round(len(groups)*.1))
         for i,group in enumerate(groups):
-            target = 'test' if i==0 else 'validation' if i==1 else 'train'
+            target = 'test' if i<heldout else 'validation' if i<2*heldout else 'train'
             result[target].extend(group)
     return result

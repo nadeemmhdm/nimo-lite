@@ -6,3 +6,6 @@ data/
 *.pt
 *.sqlite*
 .env
+artifacts/
+build/
+dist/

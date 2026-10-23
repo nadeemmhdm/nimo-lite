@@ -2,7 +2,7 @@
 
 ## What was performed
 
-Source-level engineering review of local request boundaries, data paths, media input validation, training approvals, checkpoint loading, subprocess invocation, and optional network access. Seventeen functional tests include security-related regression checks; see EVALUATION.md. SECURITY.md documents the intended trust boundaries and known residual risks.
+Source-level engineering review of local request boundaries, data paths, media input validation, training approvals, checkpoint loading, subprocess invocation, and optional network access. Twenty-six functional tests include security-related regression checks; see EVALUATION.md. SECURITY.md documents the intended trust boundaries and known residual risks.
 
 Reviewed surfaces include `nimo/app.py` (Host/Origin/token checks, strict local asset policy, no generic execution tools, fixed online provider), `nimo/security.py` (confinement and advisory review), `nimo/store.py` (bounded decoding, approval/version records), `nimo/models.py` (`weights_only=True` loading), and `nimo/training.py` (fixed-shape training, immutable metadata snapshot, atomic save, acceptance and recovery). The application never exposes model-generated arguments to a shell or arbitrary network destination.
 
@@ -21,3 +21,9 @@ The requested Codex Security skill was read, but its required referenced scan-pr
 - Dependency vulnerability auditing and platform-specific sandbox testing were not completed.
 
 Deployment is restricted to a trusted, single-user, loopback environment. Independent security review is required before widening that scope.
+
+## v0.2.0 additions
+
+Reviewed new boundaries: model labels can choose only a fixed response allowlist; unsupported labels and uncertain scores fall back without executing tools. Batch approval requires explicit review acknowledgment and cannot bypass flagged-example review. The model installer reads only fixed supported members from a bounded local ZIP, verifies hashes, uses safe tensor loading, bounds architectures before construction, and imports no training examples automatically. Installed public evaluation files have separate integrity hashes. Checksum-based previous-training overlap checks now cover reimports with new IDs. No new model tools, generic URL fetcher, or shell interface were introduced.
+
+Tests cover malicious/unsupported intent labels, missing review acknowledgment, flagged bulk examples, changed checkpoint bytes, changed evaluation files, oversized model architecture metadata, and data reimport leakage. These checks are regression evidence, not an independent security certification or proof of complete resistance to adversarial media, poisoning, or prompt injection.

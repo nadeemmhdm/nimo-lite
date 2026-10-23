@@ -171,9 +171,11 @@ class Store:
 
     def validate(self, task):
         from .datasets import split_samples
-        if task not in ('text','image'):
-            raise ValueError('Only text language modeling and single-label image classification training implemented')
-        rows = [r for r in self.samples(task) if r['status']=='approved']
+        if task not in ('text','image','intent'):
+            raise ValueError('Choose text, image, or intent training')
+        rows = [r for r in self.samples('text' if task=='intent' else task) if r['status']=='approved']
+        if task=='intent':
+            rows = [r for r in rows if r['content'].get('category','').startswith('intent:')]
         errors, warnings = [], []
         if task=='image':
             for r in rows:
@@ -204,7 +206,16 @@ class Store:
                 if key in questions and questions[key] != c['answer']:
                     errors.append('Contradictory answers for question: '+c['question'][:100])
                 questions[key] = c['answer']
+        if task=='intent':
+            from .nlp import RESPONSES, intent_label
+            labels = {intent_label(r) for r in rows}
+            if len(labels)<2: errors.append('Intent training needs at least two intent categories')
+            if labels-set(RESPONSES): errors.append('Supported assistant intents: '+', '.join(sorted(RESPONSES)))
         splits = split_samples(rows, task)
+        if task=='intent':
+            for label in {r['content']['category'] for r in rows}:
+                if any(not any(r['content']['category']==label for r in group) for group in splits.values()):
+                    errors.append('Each split needs independent examples of '+label)
         for name, group in splits.items():
             if not group:
                 errors.append(f'Empty {name} split: add diverse independently sourced samples (at least 3 groups per class)')
@@ -225,7 +236,7 @@ class Store:
 
     def retrieve(self, query):
         import re
-        words = set(re.findall(r'\w+', query.casefold()))
+        words = set(re.findall(r'\w+', query.casefold())) - {'a','an','the','is','are','was','were','what','who','how','do','does','can','could','please','you','your','my','i','me','to','of','in','and','it'}
         with self.db() as db:
             rows = [dict(r) for r in db.execute('SELECT * FROM knowledge')]
         scored = [(len(words & set(re.findall(r'\w+',r['text'].casefold()))),r) for r in rows]

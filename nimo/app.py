@@ -36,6 +36,7 @@ class Train(BaseModel):
     task:str
     epochs:int=Field(default=5,ge=1,le=100)
     resume:str|None=None
+    context:int=Field(default=128,ge=128,le=256)
 
 class Chat(BaseModel):
     text:str=Field(min_length=1,max_length=4096)
@@ -113,7 +114,7 @@ def create_app(root=None):
     app.mount('/static',StaticFiles(directory=STATIC),name='static')
 
     @app.get('/api/bootstrap')
-    def bootstrap(): return dict(token=secret,name='Nimo Lite',version='0.1.0',offline=not app.state.online)
+    def bootstrap(): return dict(token=secret,name='Nimo Lite',version='0.2.0',offline=not app.state.online)
 
     @app.get('/api/status')
     def status():
@@ -150,6 +151,41 @@ def create_app(root=None):
         with dataset_lock:
             mutable(); results=[store.add_text(**x.model_dump()) for x in parsed]
         return dict(imported=len(results),results=results)
+
+    @app.get('/api/starter')
+    def starter_info():
+        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text())
+        return dict(name='Assistant basics v1',examples=len(items),license='CC0-1.0',
+                    source='Original Nimo Lite contributor examples; no scraped or private data',
+                    note='Small educational dataset; does not establish general assistant capability')
+
+    @app.post('/api/starter')
+    def load_starter():
+        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text())
+        with dataset_lock:
+            mutable()
+            results=[store.add_text(**item) for item in items]
+        return dict(added=sum(not r['duplicate'] for r in results),duplicates=sum(r['duplicate'] for r in results),
+                    note='Examples are pending review. No weights changed.')
+
+    @app.post('/api/review')
+    def batch_review(body:dict):
+        ids=body.get('ids')
+        if not isinstance(ids,list) or len(ids)>5000 or not ids or any(not isinstance(x,str) for x in ids):
+            raise ValueError('Select 1–5000 sample IDs')
+        if body.get('reviewed') is not True: raise ValueError('Confirm that you reviewed the selected examples')
+        if body.get('status') not in ('approved','rejected'): raise ValueError('Choose approved or rejected')
+        for ident in ids: safe_id(ident)
+        changed=[]; errors=[]
+        with dataset_lock:
+            mutable()
+            for ident in dict.fromkeys(ids):
+                try:
+                    store.update(ident,dict(status=body['status']))
+                    changed.append(ident)
+                except ValueError as exc:
+                    errors.append(dict(id=ident,error=str(exc)))
+        return dict(changed=len(changed),errors=errors,note='Flagged examples still require individual review')
 
     @app.post('/api/images')
     async def image(file:UploadFile=File(...),source:str=Form(...),license:str=Form(...)):
@@ -197,7 +233,7 @@ def create_app(root=None):
     def train(body:Train):
         from .training import start_job
         with dataset_lock:
-            ident=start_job(store,body.task,body.epochs,body.resume)
+            ident=start_job(store,body.task,body.epochs,body.resume,body.context)
             log=open(store.root/'models'/f'{ident}.log','w')
             try:
                 proc=subprocess.Popen([sys.executable,'-m','nimo.training',str(store.root),ident],stdout=log,stderr=log,
@@ -235,11 +271,19 @@ def create_app(root=None):
         from .training import evaluate
         with inference_lock:
             row=model_row(ident); model,ck=load_model(confined(store.root,row['path']))
-            current={r['id']:r for r in store.samples(row['task'])}
+            recorded=json.loads(row['metrics'])
+            if recorded.get('bundled_evaluation_sha256'):
+                import hashlib
+                raw=(store.root/'models'/f'{ident}.eval.json').read_bytes()
+                if hashlib.sha256(raw).hexdigest()!=recorded['bundled_evaluation_sha256']:
+                    raise ValueError('Bundled evaluation file changed; reinstall the trusted model bundle')
+                result=evaluate(model,json.loads(raw),row['task'],store,ck['classes'],objective=ck['config'].get('objective','full_sequence_v1'))
+                return dict(split='bundled test',metrics=result,note='Immutable public evaluation samples; no training examples imported')
+            current={r['id']:r for r in store.samples('text' if row['task']=='intent' else row['task'])}
             for sid,version,checksum in ck['snapshot']:
                 if sid not in current or current[sid]['version']!=version or current[sid]['checksum']!=checksum:
                     raise ValueError('Dataset changed; historical metrics remain available but current reevaluation is blocked')
-            result=evaluate(model,[current[i] for i in ck['split']['test']],row['task'],store,ck['classes'])
+            result=evaluate(model,[current[i] for i in ck['split']['test']],row['task'],store,ck['classes'],objective=ck['config'].get('objective','full_sequence_v1'))
         return dict(split='test',metrics=result)
 
     @app.get('/api/models/{ident}/export')
@@ -268,7 +312,23 @@ def create_app(root=None):
             refs=store.retrieve(body.text)
             answer='\n\n'.join(r['text'] for r in refs) if refs else 'No matching local knowledge. Add a sourced note or train an experimental model.'
             return dict(answer=answer,mode='knowledge retrieval; weights unchanged',sources=refs,latency_s=time.monotonic()-started)
-        if body.mode!='model': raise ValueError('Choose knowledge or model')
+        if body.mode=='assistant':
+            refs=store.retrieve(body.text)
+            if refs:
+                return dict(answer='\n\n'.join(r['text'] for r in refs),mode='Local knowledge retrieval; weights unchanged',
+                            sources=refs,latency_s=time.monotonic()-started)
+            try:
+                row=model_row(task='intent')
+            except ValueError:
+                return dict(answer="I'm Nimo Lite, your local assistant workbench. Add sourced notes or train the starter intent model to enable basic assistant requests.",
+                            mode='Built-in onboarding response; no model inference',sources=[],latency_s=time.monotonic()-started)
+            from .models import load_model
+            from .nlp import assistant_reply
+            with inference_lock:
+                model,ck=load_model(confined(store.root,row['path']))
+                result=assistant_reply(model,ck,body.text)
+            return dict(result,sources=[],model=row['id'],latency_s=time.monotonic()-started)
+        if body.mode!='model': raise ValueError('Choose assistant, knowledge or model')
         from .models import load_model
         with inference_lock:
             row=model_row(task='text'); model,ck=load_model(confined(store.root,row['path']))

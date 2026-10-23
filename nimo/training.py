@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from PIL import Image
 from .hardware import hardware, accelerator
-from .models import ByteTokenizer, NimoLM, NimoVision, load_model
+from .models import ByteTokenizer, NimoLM, NimoVision, NimoIntent, load_model
 from .security import confined, safe_id
 from .store import Store, uid, now
 
@@ -21,29 +21,42 @@ def image_tensor(path):
     return torch.from_numpy(arr).permute(2,0,1)
 
 
-def text_tensor(row, context):
+def text_tensor(row, context, objective='answer_only_v2'):
     c = row['content']; tok = ByteTokenizer()
-    ids = ([tok.bos]+tok.encode('User: '+c['question']+'\nNimo: '+c['answer'])+[tok.eos])[:context+1]
-    return torch.tensor(ids[:-1]),torch.tensor(ids[1:])
+    if objective=='full_sequence_v1':
+        ids = ([tok.bos]+tok.encode('User: '+c['question']+'\nNimo: '+c['answer'])+[tok.eos])[:context+1]
+        return torch.tensor(ids[:-1]),torch.tensor(ids[1:])
+    # Reserve at least half the sequence for the answer, and mask prompt targets.
+    question = tok.encode(c['question'])[-max(1,context//2-16):]
+    prefix = [tok.bos]+tok.encode('User: ')+question+tok.encode('\nNimo: ')
+    answer = tok.encode(c['answer'])+[tok.eos]
+    ids = (prefix+answer)[:context+1]
+    targets = torch.tensor(ids[1:])
+    targets[:len(prefix)-1] = -100
+    return torch.tensor(ids[:-1]),targets
 
 
-def batch(rows, task, store, classes, context, device):
+def batch(rows, task, store, classes, context, device, objective='answer_only_v2'):
     if task=='image':
         x = torch.stack([image_tensor(confined(store.root,r['content']['processed'])) for r in rows])
         y = torch.tensor([classes.index(r['content']['labels'][0]) for r in rows])
+    elif task=='intent':
+        from .nlp import features,intent_label
+        x = torch.stack([features(r['content']['question']) for r in rows])
+        y = torch.tensor([classes.index(intent_label(r)) for r in rows])
     else:
-        pairs = [text_tensor(r,context) for r in rows]
+        pairs = [text_tensor(r,context,objective) for r in rows]
         x = nn.utils.rnn.pad_sequence([p[0] for p in pairs],batch_first=True,padding_value=256)
         y = nn.utils.rnn.pad_sequence([p[1] for p in pairs],batch_first=True,padding_value=-100)
     return x.to(device),y.to(device)
 
 
-def evaluate(model, rows, task, store, classes, device='cpu', batch_size=2):
+def evaluate(model, rows, task, store, classes, device='cpu', batch_size=2, objective='answer_only_v2'):
     model.eval(); loss_sum,count,correct = 0.,0,0
-    matrix = np.zeros((len(classes),len(classes)),dtype=np.int64) if task=='image' else None
+    matrix = np.zeros((len(classes),len(classes)),dtype=np.int64) if task!='text' else None
     with torch.inference_mode():
         for i in range(0,len(rows),batch_size):
-            x,y = batch(rows[i:i+batch_size],task,store,classes,getattr(model,'context',128),device)
+            x,y = batch(rows[i:i+batch_size],task,store,classes,getattr(model,'context',128),device,objective)
             logits = model(x)
             loss = nn.functional.cross_entropy(logits.reshape(-1,logits.shape[-1]),y.reshape(-1),ignore_index=-100,reduction='sum')
             loss_sum += float(loss); count += int((y!=-100).sum())
@@ -61,9 +74,10 @@ def evaluate(model, rows, task, store, classes, device='cpu', batch_size=2):
     return result
 
 
-def start_job(store, task, epochs=5, resume=None):
-    if task not in ('text','image') or not isinstance(epochs,int) or not 1<=epochs<=100:
-        raise ValueError('Use text or image, 1–100 epochs')
+def start_job(store, task, epochs=5, resume=None, context=128):
+    if task not in ('text','image','intent') or not isinstance(epochs,int) or not 1<=epochs<=100:
+        raise ValueError('Use text, image or intent, 1–100 epochs')
+    if context not in (128,256): raise ValueError('Context must be 128 or 256 bytes')
     report = store.validate(task)
     if not report['valid']: raise ValueError('; '.join(report['errors']))
     hw = hardware(store.root)
@@ -74,8 +88,8 @@ def start_job(store, task, epochs=5, resume=None):
         safe_id(resume)
         if not (store.root/'models'/f'{resume}.pt').exists(): raise ValueError('Resume checkpoint missing')
     ident = uid()
-    config = dict(epochs=epochs,batch_size=hw['batch_size'],seed=42,learning_rate=.003,
-        context=128,threads=hw['threads'],resume=resume,split=report['splits'])
+    config = dict(epochs=epochs,batch_size=hw['batch_size'],seed=42,learning_rate=.03 if task=='intent' else .003,
+        context=context,objective='answer_only_v2',threads=hw['threads'],resume=resume,split=report['splits'])
     with store.db() as db:
         db.execute('BEGIN IMMEDIATE')
         if db.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running','paused','stopping')").fetchone():
@@ -94,10 +108,11 @@ def run_job(root, ident):
     if hardware(root)['available_gb']<1: raise ValueError('Insufficient free RAM')
     device = accelerator()['device']
     if device=='cuda' and accelerator()['free_vram_gb']<1: device='cpu'
-    rows = {r['id']:r for r in store.samples(task)}
+    rows = {r['id']:r for r in store.samples('text' if task=='intent' else task)}
     splits = {name:[rows[i] for i in ids] for name,ids in config['split'].items()}
-    classes = sorted({r['content']['labels'][0] for r in splits['train']}) if task=='image' else []
-    model = NimoLM() if task=='text' else NimoVision(len(classes))
+    from .nlp import intent_label
+    classes = sorted({r['content']['labels'][0] for r in splits['train']}) if task=='image' else sorted({intent_label(r) for r in splits['train']}) if task=='intent' else []
+    model = NimoLM(context=config['context']) if task=='text' else NimoVision(len(classes)) if task=='image' else NimoIntent(len(classes))
     optimizer = torch.optim.AdamW(model.parameters(),lr=config['learning_rate'])
     start_epoch,start_offset = 0,0
     snapshot = [[r['id'],r['version'],r['checksum']] for group in splits.values() for r in group]
@@ -107,6 +122,8 @@ def run_job(root, ident):
             raise ValueError('Resume requires unchanged dataset, labels, and splits')
         optimizer = torch.optim.AdamW(model.parameters(),lr=config['learning_rate'])
         optimizer.load_state_dict(ck['optimizer'])
+        config['objective']=ck['config'].get('objective','full_sequence_v1')
+        config['context']=getattr(model,'context',128)
         start_epoch,start_offset = ck['epoch'],ck.get('offset',0)
         torch.set_rng_state(ck['rng'])
         if start_epoch>=config['epochs']: raise ValueError('Resume total epochs must exceed checkpoint epoch')
@@ -145,14 +162,17 @@ def run_job(root, ident):
             save(epoch,offset); raise ValueError('Low RAM: checkpoint saved; stopped')
         return True
     status('running',parameters=sum(p.numel() for p in model.parameters()))
-    baseline=evaluate(model,splits['validation'],task,store,classes,device,bs)
+    baseline=evaluate(model,splits['validation'],task,store,classes,device,bs,config['objective'])
     with store.db() as db: active=db.execute('SELECT * FROM models WHERE active=1 AND task=?',(task,)).fetchone()
     previous=None
     if active:
         old,ck=load_model(confined(store.root,active['path']))
-        if set(ck['split']['train']) & set(config['split']['validation']+config['split']['test']):
+        old_train=set(ck['split']['train'])
+        old_checksums={checksum for sample,version,checksum in ck['snapshot'] if sample in old_train}
+        heldout=config['split']['validation']+config['split']['test']
+        if old_train & set(heldout) or old_checksums & {rows[sample]['checksum'] for sample in heldout}:
             raise ValueError('Prior model trained on current held-out samples; create clean evaluation data')
-        if ck['classes']==classes: previous=evaluate(old,splits['validation'],task,store,classes,'cpu',bs)
+        if ck['classes']==classes: previous=evaluate(old,splits['validation'],task,store,classes,'cpu',bs,config['objective'])
         del old
     for epoch in range(start_epoch,config['epochs']):
         order=list(splits['train']); random.Random(42+epoch).shuffle(order)
@@ -160,20 +180,22 @@ def run_job(root, ident):
         model.train()
         for i in range(offset,len(order),bs):
             if not control(epoch,i): return
-            x,y=batch(order[i:i+bs],task,store,classes,128,device)
+            x,y=batch(order[i:i+bs],task,store,classes,config['context'],device,config['objective'])
             optimizer.zero_grad(set_to_none=True); logits=model(x)
             loss=nn.functional.cross_entropy(logits.reshape(-1,logits.shape[-1]),y.reshape(-1),ignore_index=-100)
             if not torch.isfinite(loss): raise ValueError('Non-finite loss')
             loss.backward(); nn.utils.clip_grad_norm_(model.parameters(),1.); optimizer.step()
             status('running',epoch=epoch+1,batch=i//bs+1,batches=math.ceil(len(order)/bs),loss=float(loss.detach()))
-        val=evaluate(model,splits['validation'],task,store,classes,device,bs)
+        val=evaluate(model,splits['validation'],task,store,classes,device,bs,config['objective'])
         progress['validation']=val; save(epoch+1)
-    test=evaluate(model,splits['test'],task,store,classes,device,bs)
+    test=evaluate(model,splits['test'],task,store,classes,device,bs,config['objective'])
     val=progress['validation']; reference=previous or baseline
-    accepted=val['loss']<reference['loss'] and (task!='image' or val['accuracy']>=max(.5,reference['accuracy']))
+    accepted=val['loss']<reference['loss'] and (task=='text' or val['accuracy']>=max(.5,reference['accuracy']))
     metrics=dict(validation=val,test=test,baseline_validation=baseline,previous_validation=previous,accepted=accepted,
-        acceptance='Validation loss improves; image accuracy >= max(0.5, reference). Test does not select versions.',
-        duration_s=time.monotonic()-started,split=config['split'],dataset_versions={r['id']:r['version'] for r in rows.values()},seed=42,pretrained=False)
+        acceptance='Validation loss improves; classifier accuracy >= max(0.5, reference). Test does not select versions.',
+        duration_s=time.monotonic()-started,split=config['split'],dataset_versions={r['id']:r['version'] for r in rows.values()},seed=42,pretrained=False,objective=config['objective'],architecture=model.config)
+    progress['validation']=val
+    save(config['epochs'])
     with store.db() as db:
         if accepted: db.execute('UPDATE models SET active=0 WHERE task=?',(task,))
         db.execute('INSERT INTO models VALUES(?,?,?,?,?,?)',(ident,task,'models/'+ident+'.pt',json.dumps(metrics),int(accepted),now()))

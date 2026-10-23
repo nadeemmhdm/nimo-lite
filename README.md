@@ -1,106 +1,114 @@
 # Nimo Lite
 
-**Your models. Your machine. Your learning process.**
+**A local assistant you can teach, inspect, and improve.**
 
-Nimo Lite is an open-source, local-first experimental AI workbench with a compact, llama.cpp-inspired web interface. Repository name: `nemo-lite`; application and model name: **Nimo Lite**.
+[Getting started](#getting-started) · [Starter models](#use-the-trained-starter-models) · [Training guide](#teach-nimo-with-your-data) · [Model card](docs/STARTER_MODEL_CARD.md) · [Security](SECURITY.md)
 
-Train a small original language model or a separate image classifier from random initialization. Label your own images, review examples, save local knowledge, monitor training, and retain versioned checkpoints. No pretrained weights are bundled, downloaded, or renamed.
+Nimo Lite is an open-source experimental personal AI workbench. Chat with saved knowledge, use a small trained NLP intent assistant, label images, and train original models from random weights through a local web interface.
 
-> **Status: v0.1.0 experimental foundation.** This is not a generally capable personal assistant. Small, locally trained models can produce nonsense and incorrect answers. No advanced reasoning, coding, Malayalam fluency, OCR, object detection training, or visual question answering capability is claimed.
+**v0.2.0:** dark and light themes, a guided training workflow, reviewed starter data, an original trained intent classifier, and a separately trained byte-level language model. No pretrained weights are downloaded or renamed. Application source is MIT licensed; original starter data and starter weights are CC0-1.0. The GitHub repository currently remains private; its visibility has not been changed.
 
-![Nimo Lite local web interface](docs/screenshots/workbench.png)
+> This is a small working foundation, not an advanced general assistant. The released language model can produce corrupted or incorrect text. Recommended assistant mode uses clearly identified intent routing and authored responses, with separate sourced knowledge retrieval. See the unedited results and limitations in the model card.
 
-## Quick start
+| Dark workspace | Light workspace |
+|---|---|
+| ![Nimo Lite dark theme](docs/screenshots/workbench-dark.png) | ![Nimo Lite light theme](docs/screenshots/workbench-light.png) |
 
-Python 3.10+ is required. Initial dependency installation needs internet access; core operation does not.
+## Getting started
+
+Python 3.10+ is required. Initial dependency installation requires internet; core local use does not.
 
 ```bash
+git clone https://github.com/nadeemmhdm/nimo-lite.git
+cd nimo-lite
 python -m venv .venv
-# Linux / macOS
 source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-# For CPU-only systems, install the appropriate CPU wheel first:
+# CPU-only example; use the official PyTorch selector for a compatible GPU wheel.
 python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -e '.[test]'
 nimo-lite --data ./data --port 8080
 ```
 
-Open **http://127.0.0.1:8080** locally. The server intentionally binds to loopback. Do not reverse-proxy or expose it to a network. Linux CPU execution is the verified target; Windows, macOS, CUDA, and Apple Metal are implementation targets awaiting device-specific testing.
+Open **http://127.0.0.1:8080**. Run one server per data directory. The server intentionally binds to loopback; do not expose it through a tunnel or reverse proxy. Linux CPU execution is verified. Windows, macOS, CUDA, and Metal remain unverified implementation targets.
 
-## Three distinct learning modes
+The top-right theme button switches between dark and light. The first visit follows your system preference; your choice is saved only in this browser. On small screens, use the menu button to open navigation.
 
-| Mode | What it does | Changes weights? |
-|---|---|---|
-| A · Knowledge | Stores sourced notes in SQLite; retrieves lexical matches with citations | No |
-| B · Task training | Trains the original CNN on approved single-label images | Yes, classifier only |
-| C · Language training | Trains the original byte-level Transformer on approved text examples | Yes, text model only |
+## Use the trained starter models
 
-Feedback and example entry are curation steps. They are never represented as completed model training.
+Download `nimo-lite-starter-v0.2.0.zip` from [Releases](https://github.com/nadeemmhdm/nimo-lite/releases). Repository access is required while the repository is private. Verify its checksum against `SHA256SUMS`, then install locally:
 
-## Teach images
-
-1. Open **Image Labeling Studio**. Enter source and license/authorized-use information.
-2. Upload JPEG, PNG, or WebP files individually, in batches, or with the browser folder picker.
-3. Select an image, enter labels and optional notes. Drag to annotate bounding boxes after entering a box label.
-4. Mark labels verified and explicitly approve for training. Classification training requires exactly one label per image. Multiple labels and boxes remain available for annotation/export.
-5. Add at least three independent image groups in **each** category, preferably many more. Near-duplicate images are grouped conservatively to reduce split leakage.
-6. In **Training Center**, validate the image dataset, choose epochs, and start training.
-7. Inspect loss, validation results, and held-out test metrics in **Model Manager**. New versions activate only when acceptance criteria pass.
-8. Use **Suggest / Classify** for an unverified prediction from the accepted local classifier. Accepting copies a label into the editor; save and approve it explicitly.
-
-Original upload bytes are preserved separately from normalized PNG copies. Export contains both copies, provenance, labels, and COCO bounding boxes. Deletion removes image files and sample rows; existing checkpoints may still encode information learned previously.
-
-## Teach text
-
-Enter question/instruction, expected answer, category, source, and usage declaration. English, Malayalam, Manglish, mathematics, and code can be stored without requiring separate tokenizers. Review and approve in **Dataset Manager**. Sensitive or suspicious examples require explicit acknowledgment. Validation detects normalized-question conflicts and empty splits.
-
-Start **Language model** training. The tokenizer encodes UTF-8 bytes with PAD/BOS/EOS tokens. The tiny causal Transformer uses 128-byte contexts, two 64-wide layers, and next-byte loss. Unicode round trips are supported; this does not establish multilingual conversational proficiency. Long examples are truncated for training, so keep experiments short.
-
-The included JSON examples are original CC0 smoke-test material, not a trusted factual corpus or an accuracy benchmark. Verify licenses, consent, and correctness of every imported dataset yourself. The application records declarations; it cannot establish legal permission or truth automatically.
-
-## Training lifecycle
-
-- One child process trains at a time, separately from web requests and inference.
-- Pause, resume, save, and safe stop apply at batch boundaries. Paused workers retain RAM.
-- Checkpoints contain model, optimizer, RNG state, epoch, batch offset, sample versions, and split IDs. Writes use atomic replacement.
-- To resume a stopped/interrupted run, paste its checkpoint ID and choose a larger total epoch target if required. Dataset content, versions, labels, and splits must match.
-- Accepted versions can be restored without deleting later experiments. Failed acceptance never replaces the active model.
-- Current and previous models are compared on the same validation split when label spaces match. Evaluation refuses obvious prior-training overlap with current held-out IDs.
-- Test results are reported after training and do not govern acceptance. Small repeated experiments can still overfit validation; use a fresh independent external evaluation set for real claims.
-
-## Privacy and security
-
-Offline is the default. No telemetry, remote inference, automatic model downloads, or automatic document ingestion is implemented. Online mode only enables explicit Wikipedia search queries, with source links and retrieval dates. Search results never enter memory or training automatically.
-
-The server checks Host and Origin, requires a local session token for mutations, and serves scripts/styles locally under a strict content policy. Models have no filesystem, shell, URL, or network tool interface. Imported text and model outputs are rendered as text. Checkpoints use PyTorch `weights_only=True`; arbitrary uploaded checkpoints are not supported.
-
-This is a single-user local prototype, not a hardened multiuser service. Dataset storage is not encrypted. Use an encrypted disk and a trusted OS account. See [SECURITY.md](SECURITY.md) for boundaries and residual risks.
-
-## Project layout
-
-```text
-nimo/                  Python application and original models
-  static/              Local HTML/CSS/JavaScript dashboard
-  store.py             SQLite metadata, images, review and knowledge
-  datasets.py          Deterministic leakage-group splits
-  models.py            Byte tokenizer, causal Transformer, CNN
-  training.py          Training, metrics, checkpointing, resumption
-  app.py               Loopback HTTP API and background job controller
-  video.py             Optional sequential video frame preparation
-  hardware.py          RAM/cgroup detection and conservative profiles
-tests/                 Functional, training and security regression tests
-examples/              Original synthetic teaching examples
-docs/                  Architecture, setup, evaluation and limitations
-data/                  Ignored local datasets, tokens, logs and weights
+```bash
+python -m nimo.install nimo-lite-starter-v0.2.0.zip --data ./data
+nimo-lite --data ./data
 ```
 
-## Test and contribute
+Installation reads a bounded local archive with fixed model filenames and verified hashes. It activates the accepted checkpoints and preserves older versions. It does not fetch URLs, upload data, or automatically approve training examples. A separate immutable public test set allows reevaluation without importing it into your personal training dataset.
+
+| Component | Training performed | Actual held-out result |
+|---|---|---|
+| Basic assistant NLP | Randomly initialized 22,539-parameter intent classifier; 11 labels, 60 epochs | 7/11 correct requests; macro F1 0.5303 |
+| Experimental text model | Original 133,120-parameter causal Transformer; 256-byte context, 80 epochs | Byte accuracy 47.09%; perplexity 88.74 |
+
+Both used only the bundled original educational corpus: 140 examples, no scraped data or private user content. These small internal holdouts are not proof of real-world assistant quality. [Model card](docs/STARTER_MODEL_CARD.md) · [Complete training record and probes](docs/starter-training-results.json)
+
+## What happens when you chat?
+
+| Mode | Behavior | Weight updates during chat? |
+|---|---|---|
+| Personal assistant | Retrieves matching local notes; otherwise uses the active intent classifier to select an allowlisted authored response | No |
+| Local knowledge only | Returns matching saved notes with sources | No |
+| Experimental text model | Generates bytes from your active original language-model checkpoint | No |
+
+The interface identifies the response source. Basic assistant behavior is friendly, local, and honest about uncertainty. An intent label can select an authored response, never a shell command, file operation, or network tool. Low-confidence predictions use an uncertainty response; scores are uncalibrated and misclassification remains possible.
+
+## Teach Nimo with your data
+
+The Training Center guides four real steps: **prepare → review → train → evaluate**.
+
+1. **Prepare.** Add a question and checked answer with provenance and usage permission, import a JSON dataset, upload images, or load the original starter examples.
+2. **Review.** Search and filter in Dataset Manager. Select individual examples or a page, inspect their contents and sources, and explicitly acknowledge review before bulk approval. Flagged examples require individual review.
+3. **Train.** Choose basic NLP intents, text generation, or image classification. Check the dataset, set epochs, and start a separate local training worker. The app reports real progress and loss. Pause, save, resume, and stop safely at batch boundaries.
+4. **Evaluate.** Inspect held-out results in Model Manager. Validation gates determine activation; test metrics do not select versions. Restore accepted versions or export their checkpoints.
+
+Saving knowledge, entering examples, submitting feedback, training a classifier, and updating language-model weights remain distinct actions. No improvement is claimed until an actual training run and evaluation complete.
+
+### Text and NLP
+
+The original tokenizer encodes UTF-8 bytes plus PAD/BOS/EOS. New language training masks prompt targets and optimizes answer prediction, with a 128- or 256-byte context. Long questions are truncated to reserve space for an answer. English, Malayalam, Manglish, code, and mathematics examples can be stored; the tokenizer alone does not confer fluency or reasoning.
+
+The separate intent architecture uses stable hashed word/character features and a trainable 11-class linear head. Use `intent:greeting`, `intent:identity`, and other supported categories shown in the example-type selector. Labels train recognition; response policy remains explicit application code. This keeps arbitrary imported targets from silently becoming executable assistant behavior.
+
+### Images and video
+
+Upload JPEG, PNG, and WebP images individually, in batches, or with a browser folder picker. Original bytes remain separate from processed previews. Add labels and notes, verify them, and explicitly approve for training. Classifier suggestions are unverified until you review them. Rename, merge, or remove categories; affected examples return to review.
+
+Classification requires exactly one verified label and independent samples in each split. Bounding boxes and multiple labels are supported for annotation and COCO export; detector training, OCR, captions, and visual question answering are not implemented. Optional `pip install -e '.[video]'` enables local timestamped frame extraction, not video understanding or audio transcription.
+
+### Checkpoints and recovery
+
+Atomic checkpoints contain weights, optimizer/RNG state, epoch/batch offset, sample versions, checksums, and split IDs. Resume requires unchanged data and a sufficient total epoch target. Prior training overlap is checked by IDs and checksums before comparing current held-out data. Approximate image grouping and normalized text questions reduce some leakage; they do not identify every related example.
+
+## Local privacy and resources
+
+Offline is the default. There is no telemetry, remote inference, or automatic weight download. Optional Wikipedia search sends only an explicit query after you enable online mode; results carry links and retrieval dates and never enter memory or training automatically.
+
+Input bounds, path validation, a local session token, Host/Origin checks, local assets, and a strict content policy protect the single-user application boundary. Native dependencies still run as your OS user. Storage is not encrypted, and there is no hard memory sandbox or universal injection guarantee. [Security policy](SECURITY.md)
+
+The intended minimum is 6 GB RAM. Conservative profiles choose small batches, at most two CPU threads, one training worker, and bounded model shapes. RAM detection honors Linux cgroups, and available memory is checked before training and between batches. Validation ran with an 8 GiB cgroup ceiling; no physical 6 GB benchmark is claimed.
+
+Export datasets or models from the dashboard. Stop the app before backing up the whole data directory. Deletion removes local rows/files but is not secure erasure or machine unlearning. Private data, tokens, environments, and weights are ignored by Git. The release model bundle was built only from original public fixtures in a separate training directory.
+
+## Reproduce and contribute
 
 ```bash
 python -m pytest -q
+python scripts/build_starter_data.py
+# Requires a fresh output directory; only original bundled data is trained.
+python scripts/train_starter.py --root artifacts/my-independent-run
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/INSTALLATION.md](docs/INSTALLATION.md), [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md), [docs/EVALUATION.md](docs/EVALUATION.md), and [ROADMAP.md](ROADMAP.md).
+**26 automated tests** cover real training/recovery, intent routing, installed-model reevaluation, review gates, media annotation, privacy, request boundaries, and data leakage checks. Playwright checks dark/light persistence, mobile layout, chat, labeling, bulk review, export, and evaluation. See [verification](docs/EVALUATION.md).
 
-Code is [MIT licensed](LICENSE). Dataset declarations and third-party dependencies retain their own terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Release notes: [CHANGELOG.md](CHANGELOG.md).
+[Architecture](docs/ARCHITECTURE.md) · [Installation](docs/INSTALLATION.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)

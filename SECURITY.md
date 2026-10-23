@@ -2,7 +2,7 @@
 
 ## Support status
 
-Version 0.1 is experimental and has no production security support guarantee. Only the latest source receives fixes. Do not use it as a credential store, internet-facing server, or authority for high-impact decisions.
+Version 0.2 is experimental and has no production security support guarantee. Only the latest source receives fixes. Do not use it as a credential store, internet-facing server, or authority for high-impact decisions.
 
 ## Reporting a vulnerability
 
@@ -13,10 +13,11 @@ Use the repository's private security reporting facility if enabled. If no priva
 - CLI binds to `127.0.0.1`; Host allowlist blocks DNS rebinding to arbitrary names.
 - Browser mutations require matching Origin when supplied and the local session token. Cross-origin reads are restricted by browser same-origin rules; no CORS permission is granted.
 - A strict local-only content policy, text-only DOM insertion, no framing, and no content sniffing reduce browser injection risk.
+- The intent classifier can select only allowlisted authored responses and falls back on uncertain or unsupported labels. Model scores are not calibrated.
 - Models cannot invoke shell commands, arbitrary HTTP fetches, uploads, filesystem tools, or generated programs. Training worker arguments are fixed by application code and never passed through a shell.
 - Online search is off at startup; explicit queries use a fixed Wikipedia HTTPS endpoint, TLS verification, timeout, and disabled redirects. There is no web crawler or automatic training import.
 - Images are decoded and re-encoded for preview, constrained by accepted formats, upload bytes, and pixel count. Original bytes are never served as executable content. Filenames are content-addressed.
-- Annotation coordinates, labels, UUIDs, and data paths are validated. Archive import, pickle model import, and arbitrary local path import are absent.
+- Annotation coordinates, labels, UUIDs, and data paths are validated. Generic archive import, pickle model import, and arbitrary local path import are absent from the HTTP API. An explicit local CLI installs only bounded, fixed-name model bundles with hashes and architecture limits. Checksums do not authenticate the publisher; trust the bundle source.
 - Pending training examples require approval. Flagged examples require explicit review acknowledgment. Dataset writes are blocked during live runs. Atomic checkpoints and accepted-version rollback preserve recovery paths.
 - Imported notes, images, OCR-like transcriptions, source metadata, and generated outputs remain untrusted. The pattern detector is advisory and is not a semantic security guarantee.
 
