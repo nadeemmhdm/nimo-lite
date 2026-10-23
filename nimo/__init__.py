@@ -6,9 +6,11 @@ __version__ = "0.2.0"
 try:
     from .fast_inference import install_fast_inference
     from .inference_policy import install_inference_policy
+    from .cache_lifecycle import install_cache_lifecycle
 
     install_fast_inference()
     install_inference_policy()
+    install_cache_lifecycle()
 except Exception:
     # Optional acceleration must never prevent training/import on unsupported hardware.
     pass
