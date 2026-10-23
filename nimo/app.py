@@ -154,14 +154,14 @@ def create_app(root=None):
 
     @app.get('/api/starter')
     def starter_info():
-        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text())
+        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text(encoding='utf-8'))
         return dict(name='Assistant basics v1',examples=len(items),license='CC0-1.0',
                     source='Original Nimo Lite contributor examples; no scraped or private data',
                     note='Small educational dataset; does not establish general assistant capability')
 
     @app.post('/api/starter')
     def load_starter():
-        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text())
+        items=json.loads((Path(__file__).parent/'resources'/'assistant-basics.json').read_text(encoding='utf-8'))
         with dataset_lock:
             mutable()
             results=[store.add_text(**item) for item in items]
