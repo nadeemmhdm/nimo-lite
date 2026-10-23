@@ -20,6 +20,7 @@ video = ["opencv-python-headless>=4.10"]
 nimo-lite = "nimo.runtime:main"
 nimo-run = "nimo.launcher:main"
 nimo-update = "nimo.updater:main"
+nimo-maintain = "nimo.maintenance:main"
 
 [tool.setuptools.package-data]
 nimo = ["static/*", "resources/*.json"]
