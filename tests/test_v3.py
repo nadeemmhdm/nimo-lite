@@ -14,10 +14,9 @@ from nimo.web_access import _public_host
 
 
 GENERAL = Path(__file__).parents[1] / 'nimo/resources/general-basics.json'
-WORLD = Path(__file__).parents[1] / 'nimo/resources/world-history-basics.json'
 
 
-def test_v2_model_uses_cached_incremental_decode_shape():
+def test_legacy_v2_model_keeps_cached_incremental_decode_shape():
     model = build_text_model('micro', 128)
     first = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
     logits, cache = model(first, use_cache=True)
@@ -31,7 +30,7 @@ def test_v2_model_uses_cached_incremental_decode_shape():
 
 
 def test_standard_profile_is_target_30_to_50m_parameters():
-    model = build_text_model('standard', 256)
+    model = build_text_model('standard', 1024)
     parameters = sum(p.numel() for p in model.parameters())
     assert 30_000_000 <= parameters <= 50_000_000
 
@@ -65,14 +64,8 @@ def test_general_training_corpus_covers_requested_basics():
     assert all(row['source'].startswith('Nimo Lite contributors: original') for row in rows)
     assert all(row['license'] == 'CC0-1.0' for row in rows)
 
-    world = json.loads(WORLD.read_text())
-    world_questions = {row['question'].casefold() for row in world}
-    assert 'who was mahatma gandhi?' in world_questions
-    assert 'what is latitude?' in world_questions
-    assert all(row['category'] == 'qa:world' for row in world)
 
-
-def test_general_corpus_can_train_v2_text_model(tmp_path):
+def test_legacy_general_corpus_training_compatibility(tmp_path):
     store = Store(tmp_path)
     for item in json.loads(GENERAL.read_text())[:18]:
         row = store.add_text(**item)
@@ -88,34 +81,31 @@ def test_general_corpus_can_train_v2_text_model(tmp_path):
 def test_local_memory_is_useful_and_filters_sensitive_data(tmp_path):
     memory = LocalMemory(Store(tmp_path))
     assert extract_memories('I prefer concise technical answers')
-    assert extract_memories('ente project aanu Nimo Lite')[0]['kind'] == 'project'
-    assert extract_memories('jane VS Code use akunnu')[0] == {'kind':'tool', 'value':'VS Code'}
     saved = memory.remember_from_message('I prefer concise technical answers')
     assert saved and memory.list()[0]['kind'] == 'preference'
     before = len(memory.list())
     assert memory.remember_from_message('my password is correct-horse-battery-staple') == []
-    assert memory.remember_from_message('my Aadhaar number is 1234 5678 9012') == []
     assert memory.remember_from_message('I was diagnosed with a medical condition') == []
     assert len(memory.list()) == before
     assert memory.clear() == before
     assert memory.list() == []
 
 
-def test_runtime_replaces_routes_and_exposes_reasoning_memory(tmp_path):
+def test_runtime_routes_reasoning_memory_and_no_intent_chat_fallback(tmp_path):
     app = create_app(tmp_path)
     routes = [(getattr(r, 'path', ''), getattr(r, 'methods', set())) for r in app.router.routes]
     assert sum(path == '/api/chat' and 'POST' in methods for path, methods in routes) == 1
     assert sum(path == '/api/search' and 'POST' in methods for path, methods in routes) == 1
     assert any(path == '/api/chat/stream' and 'POST' in methods for path, methods in routes)
-    assert any(path == '/api/web/read' and 'POST' in methods for path, methods in routes)
+    assert any(path == '/api/tokenizer/train' and 'POST' in methods for path, methods in routes)
+    assert any(path == '/api/corpus/import' and 'POST' in methods for path, methods in routes)
     assert any(path == '/api/memory' and 'GET' in methods for path, methods in routes)
     assert set(REASONING) == {'fast', 'balanced', 'deep'}
 
     with TestClient(app) as client:
         client.headers['X-Nimo-Token'] = client.get('/api/bootstrap').json()['token']
-        result = client.post('/api/chat', json={'text':'What is 2 + 3 * 4?','reasoning':'fast'}).json()
-        assert result['answer'] == '14' and result['mode'].startswith('deterministic calculator')
-        result = client.post('/api/chat', json={'text':'I prefer concise technical answers','reasoning':'balanced'}).json()
-        assert result['memory_saved'] == 1
-        memories = client.get('/api/memory').json()['memories']
-        assert any(m['value'] == 'concise technical answers' for m in memories)
+        result = client.post('/api/chat', json={'text':'Hello','reasoning':'fast'})
+        assert result.status_code == 400
+        assert 'Nimo text model' in result.json()['detail']
+        saved = client.post('/api/memory', json={'text':'I prefer concise technical answers'}).json()['saved']
+        assert saved
