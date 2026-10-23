@@ -44,34 +44,12 @@ def hardware(root="."):
     physical = psutil.cpu_count(logical=False) or logical
     tier = "low" if gib < 10 else "standard" if gib < 24 else "performance"
     defaults = {
-        "low": {
-            "model_profile": "tiny",
-            "context": 512,
-            "batch_size": 1,
-            "gradient_accumulation": 8,
-            "tokenizer_vocab": 8000,
-        },
-        "standard": {
-            "model_profile": "small",
-            "context": 1024,
-            "batch_size": 2,
-            "gradient_accumulation": 4,
-            "tokenizer_vocab": 8000,
-        },
-        "performance": {
-            "model_profile": "medium",
-            "context": 2048,
-            "batch_size": 4,
-            "gradient_accumulation": 2,
-            "tokenizer_vocab": 16000,
-        },
+        "low": {"model_profile": "tiny", "context": 512, "batch_size": 1, "gradient_accumulation": 8, "tokenizer_vocab": 8000},
+        "standard": {"model_profile": "small", "context": 1024, "batch_size": 2, "gradient_accumulation": 4, "tokenizer_vocab": 8000},
+        "performance": {"model_profile": "medium", "context": 2048, "batch_size": 4, "gradient_accumulation": 2, "tokenizer_vocab": 16000},
     }[tier]
     override = os.environ.get("NIMO_INFERENCE_THREADS", "").strip()
-    inference_threads = (
-        max(1, int(override))
-        if override.isdigit()
-        else max(1, min(4, int(physical)))
-    )
+    inference_threads = max(1, int(override)) if override.isdigit() else max(1, min(4, int(physical)))
     return dict(
         os=platform.platform(),
         cpu=platform.processor() or platform.machine(),
@@ -99,34 +77,10 @@ def accelerator():
     if torch.cuda.is_available():
         free, total = torch.cuda.mem_get_info()
         bf16 = bool(torch.cuda.is_bf16_supported())
-        return dict(
-            device="cuda",
-            name=torch.cuda.get_device_name(),
-            vram_gb=round(total / 2**30, 2),
-            free_vram_gb=round(free / 2**30, 2),
-            fp16=True,
-            bf16=bf16,
-            recommended_dtype="bf16" if bf16 else "fp16",
-        )
+        return dict(device="cuda", name=torch.cuda.get_device_name(), vram_gb=round(total / 2**30, 2), free_vram_gb=round(free / 2**30, 2), fp16=True, bf16=bf16, recommended_dtype="bf16" if bf16 else "fp16")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return dict(
-            device="mps",
-            name="Apple Metal",
-            vram_gb=None,
-            free_vram_gb=None,
-            fp16=True,
-            bf16=False,
-            recommended_dtype="fp16",
-        )
-    return dict(
-        device="cpu",
-        name="CPU",
-        vram_gb=0,
-        free_vram_gb=0,
-        fp16=False,
-        bf16=False,
-        recommended_dtype="int8-or-fp32-benchmark",
-    )
+        return dict(device="mps", name="Apple Metal", vram_gb=None, free_vram_gb=None, fp16=True, bf16=False, recommended_dtype="fp16")
+    return dict(device="cpu", name="CPU", vram_gb=0, free_vram_gb=0, fp16=False, bf16=False, recommended_dtype="int8-or-fp32-benchmark")
 
 
 def _estimated_weight_mb(profile, bytes_per_parameter):
@@ -147,13 +101,15 @@ def _latest_inference_metrics():
                 continue
             metrics = dict(engine.last_metrics)
             model = engine.model
+            reported_parameters = getattr(model, "_nimo_parameter_count", None)
+            if reported_parameters is None and hasattr(model, "parameter_count"):
+                reported_parameters = model.parameter_count()
+            token_weight = getattr(getattr(model, "token", None), "weight", None)
             metrics.update(
                 {
-                    "parameters": model.parameter_count() if hasattr(model, "parameter_count") else None,
+                    "parameters": reported_parameters,
                     "context": getattr(model, "context", None),
-                    "dtype": str(getattr(getattr(model, "token", None), "weight", None).dtype).replace("torch.", "")
-                    if getattr(getattr(model, "token", None), "weight", None) is not None
-                    else None,
+                    "dtype": str(token_weight.dtype).replace("torch.", "") if token_weight is not None else None,
                     "quantization_decision": getattr(model, "_nimo_quantization_decision", None),
                     "process_ram_mb": round(psutil.Process().memory_info().rss / 2**20, 1),
                 }
@@ -177,16 +133,10 @@ def recommended_profile(root="."):
         profile = "small"
     if acc["device"] == "cpu":
         quantization = "auto"
-        estimated = {
-            "fp32_mb": _estimated_weight_mb(profile, 4),
-            "int8_weight_mb": _estimated_weight_mb(profile, 1),
-        }
+        estimated = {"fp32_mb": _estimated_weight_mb(profile, 4), "int8_weight_mb": _estimated_weight_mb(profile, 1)}
     else:
         quantization = acc["recommended_dtype"]
-        estimated = {
-            "fp32_mb": _estimated_weight_mb(profile, 4),
-            "fp16_bf16_mb": _estimated_weight_mb(profile, 2),
-        }
+        estimated = {"fp32_mb": _estimated_weight_mb(profile, 4), "fp16_bf16_mb": _estimated_weight_mb(profile, 2)}
     return {
         "hardware_profile": hw["profile"],
         "model_profile": profile,
