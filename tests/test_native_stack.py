@@ -2,10 +2,11 @@ import pytest
 import torch
 
 from nimo.conversation import ConversationStore
-from nimo.corpus import CorpusStore
+from nimo.corpus import CorpusStore, split_for_checksum
 from nimo.lm_training import _pretrain_sequences, _sft_pair
 from nimo.models import NimoLMV2, load_model
 from nimo.retrieval import bm25
+from nimo.runtime import _modern_prompt
 from nimo.store import Store
 from nimo.tokenizer import NimoTokenizer, train_tokenizer
 
@@ -53,6 +54,11 @@ def test_pretrain_and_sft_targets_mask_non_assistant_tokens():
     x,y=pair
     assert len(x)==len(y)
     assert any(v==-100 for v in y) and any(v!=-100 for v in y)
+    assistant_id=tok.special_id("ASSISTANT")
+    assistant_pos=max(i for i,value in enumerate(x) if value==assistant_id)
+    # The assistant role marker itself is masked, while the following assistant text is supervised.
+    assert y[assistant_pos-1] == -100
+    assert y[assistant_pos] != -100
 
 
 def test_one_native_pretraining_step_updates_weights():
@@ -80,14 +86,46 @@ def test_checkpoint_contains_tokenizer_and_safe_loads(tmp_path):
     assert ck["tokenizer"]["format"]=="nimo-tokenizer"
 
 
-def test_conversation_history_and_edit_delete(tmp_path):
+def test_conversation_edit_truncates_obsolete_branch(tmp_path):
     store=Store(tmp_path);chats=ConversationStore(store)
     chat=chats.create();mid=chats.add(chat["id"],"user","hello")["id"]
     chats.add(chat["id"],"assistant","hi")
-    chats.edit_message(chat["id"],mid,"hello again")
-    assert chats.messages(chat["id"])[0]["content"]=="hello again"
+    result=chats.edit_message(chat["id"],mid,"hello again")
+    messages=chats.messages(chat["id"])
+    assert result["truncated"] is True
+    assert len(messages)==1 and messages[0]["content"]=="hello again" and messages[0]["role"]=="user"
     chats.delete_message(chat["id"],mid)
-    assert len(chats.messages(chat["id"]))==1
+    assert chats.messages(chat["id"])==[]
+
+
+def test_regenerate_removes_only_latest_assistant_answer(tmp_path):
+    store=Store(tmp_path);chats=ConversationStore(store)
+    chat=chats.create();chats.add(chat["id"],"user","Explain loops")
+    chats.add(chat["id"],"assistant","First answer")
+    remaining=chats.prepare_regenerate(chat["id"],"Explain loops")
+    assert [(m["role"],m["content"]) for m in remaining]==[("user","Explain loops")]
+    chats.add(chat["id"],"assistant","Replacement answer")
+    final=chats.messages(chat["id"])
+    assert [m["content"] for m in final]==["Explain loops","Replacement answer"]
+    with pytest.raises(ValueError):
+        chats.prepare_regenerate(chat["id"],"Different question")
+
+
+def test_context_truncation_keeps_system_and_current_user():
+    tok=tokenizer_fixture()
+    history=[]
+    for i in range(12):
+        history.append({"role":"user","content":f"old question {i} "*12})
+        history.append({"role":"assistant","content":f"old answer {i} "*12})
+    current="CURRENT UNIQUE REQUEST keep this tail marker ZEBRA42"
+    ids,usage=_modern_prompt(tok,128,{"limit":64},[],[],history,current)
+    assert len(ids)<=128-usage["max_new"]-4
+    assert ids[0]==tok.special_id("BOS")
+    assert ids[1]==tok.special_id("SYSTEM")
+    assert ids[-1]==tok.special_id("ASSISTANT")
+    last_user=max(i for i,value in enumerate(ids) if value==tok.special_id("USER"))
+    assert "ZEBRA42" in tok.decode(ids[last_user+1:-2])
+    assert usage["truncated"] is True
 
 
 def test_bm25_prefers_relevant_local_knowledge():
@@ -105,6 +143,18 @@ def test_corpus_exact_near_dedup_and_archive_traversal(tmp_path):
     with zipfile.ZipFile(buf,"w") as z:z.writestr("../escape.txt","bad")
     with pytest.raises(ValueError,match="traversal"):
         corpus.import_bytes("bad.zip",buf.getvalue(),"test","CC0")
+
+
+def test_stable_dataset_split_is_deterministic_and_disjoint():
+    checks=[f"{i:064x}" for i in range(300)]
+    first=[split_for_checksum(x) for x in checks]
+    second=[split_for_checksum(x) for x in checks]
+    assert first==second
+    assert set(first)<={"train","validation","test"}
+    membership={name:{c for c,s in zip(checks,first) if s==name} for name in ("train","validation","test")}
+    assert not (membership["train"]&membership["validation"])
+    assert not (membership["train"]&membership["test"])
+    assert not (membership["validation"]&membership["test"])
 
 
 def test_generation_deterministic_seed_and_kv_cache():
