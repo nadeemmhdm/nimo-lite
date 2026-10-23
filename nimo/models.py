@@ -118,13 +118,10 @@ class ModelProfile:
     context: int
 
 
-# New native LM presets. With an 8k tokenizer these are approximately:
-# tiny ~13M, small ~32M, medium ~88M parameters.
 MODEL_PROFILES = {
     "tiny": dict(width=288,layers=8,heads=6,ff=1152,context=1024),
     "small": dict(width=384,layers=12,heads=6,ff=1536,context=1024),
     "medium": dict(width=512,layers=20,heads=8,ff=2048,context=2048),
-    # Compatibility aliases used by older UI/config files.
     "micro": dict(width=64,layers=2,heads=4,ff=192,context=128),
     "lite": dict(width=384,layers=12,heads=6,ff=1536,context=1024),
     "standard": dict(width=384,layers=12,heads=6,ff=1536,context=1024),
@@ -168,7 +165,6 @@ class CausalSelfAttention(nn.Module):
         if cache is not None:
             pk,pv=cache;k=torch.cat((pk,k),dim=2);v=torch.cat((pv,v),dim=2)
         drop=self.dropout if self.training else 0.0
-        # Prefill is causal. Single-token cached decoding can attend to all accumulated keys.
         causal=cache is None and t>1
         y=F.scaled_dot_product_attention(q,k,v,dropout_p=drop,is_causal=causal)
         y=y.transpose(1,2).contiguous().view(b,t,w)
@@ -206,7 +202,6 @@ class NimoLMV2(nn.Module):
         self.blocks=nn.ModuleList([DecoderBlock(width,heads,ff,dropout,rope_base) for _ in range(layers)])
         self.norm=RMSNorm(width);self.head=nn.Linear(width,vocab_size,bias=False);self.head.weight=self.token.weight
         self.apply(self._init_weights)
-        # GPT-style residual scaling improves stability at depth.
         scale=1/math.sqrt(2*layers)
         for block in self.blocks:
             nn.init.normal_(block.attn.out.weight,mean=0.0,std=0.02*scale)
@@ -293,7 +288,6 @@ class NimoLMV2(nn.Module):
 
     @torch.inference_mode()
     def stream_generate(self,prompt_ids,tokenizer,**kwargs):
-        # Tokenizer pieces may be partial UTF-8; incremental decoding avoids replacement noise.
         decoder=codecs.getincrementaldecoder("utf-8")("replace")
         for token in self.generate_ids(prompt_ids,tokenizer,**kwargs):
             piece=tokenizer.tokens[token] if token>=8 and token<len(tokenizer.tokens) else b""
@@ -305,9 +299,6 @@ class NimoLMV2(nn.Module):
 
 def build_text_model(profile="small",context=None,vocab_size=8000,dropout=0.0):
     if profile not in MODEL_PROFILES:raise ValueError("Unknown text model profile")
-    # The old training.py calls profile="micro" with a byte-token objective. Keep that
-    # route on the exact transitional 259-token architecture so historic workflows and
-    # checkpoints remain coherent. New pretrain/SFT jobs use tiny/small/medium.
     if profile=="micro" and (context is None or int(context)<=512) and int(vocab_size)==8000:
         return LegacyNimoLMV2(width=64,layers=2,heads=4,ff=192,context=int(context or 128))
     cfg=dict(MODEL_PROFILES[profile])
@@ -341,7 +332,7 @@ def _validate_modern(a):
 
 def load_model(path):
     checkpoint=torch.load(path,map_location="cpu",weights_only=True)
-    if not isinstance(checkpoint,dict) or "task" not in checkpoint or "architecture" not in checkpoint or "model" not in checkpoint:
+    if not isinstance(checkpoint,dict) or "task" not in checkpoint or "architecture" not in checkpoint:
         raise ValueError("Invalid checkpoint")
     task=checkpoint["task"];a=checkpoint["architecture"]
     if task=="text":
@@ -365,6 +356,7 @@ def load_model(path):
         if not 2<=a.get("classes",0)<=1000 or a.get("features")!=2048:raise ValueError("Unsupported intent architecture")
         model=NimoIntent(**a)
     else:raise ValueError("Unsupported checkpoint task")
+    if "model" not in checkpoint:raise ValueError("Invalid checkpoint")
     model.load_state_dict(checkpoint["model"],strict=True);model.eval();return model,checkpoint
 
 
