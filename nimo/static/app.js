@@ -1,6 +1,15 @@
 'use strict';
 
 const $ = id => document.getElementById(id);
+function setText(id, value) {
+  const node = $(id);
+  if (!node) {
+    console.error(`Nimo Lite dashboard markup is missing #${id}; check that the UI assets are from the same build.`);
+    return false;
+  }
+  node.textContent = String(value ?? '');
+  return true;
+}
 const pretty = value => JSON.stringify(value, null, 2);
 const names = {chat:'Chat', training:'Training Center', studio:'Image Labeling Studio', datasets:'Dataset Manager', models:'Model Manager', knowledge:'Local Knowledge Base', video:'Video Preparation', security:'Security & Search', performance:'Performance Monitor'};
 const taskNames = {intent:'Basic assistant · NLP intents', text:'Original language model', image:'Image classifier'};
@@ -30,10 +39,16 @@ function icon(name) {
 }
 function notice(text, error = false) {
   clearTimeout(noticeTimer);
-  $('notice').textContent = text; $('notice').hidden = !text;
-  $('notice').classList.toggle('error',error);
-  $('notice').setAttribute('role',error ? 'alert' : 'status');
-  if (text && !error) noticeTimer = setTimeout(() => {$('notice').hidden=true;},12000);
+  const node = $('notice');
+  if (!node) {
+    console.error('Nimo Lite dashboard markup is missing #notice; check that the UI assets are from the same build.');
+    return;
+  }
+  node.textContent = text;
+  node.hidden = !text;
+  node.classList.toggle('error', error);
+  node.setAttribute('role', error ? 'alert' : 'status');
+  if (text && !error) noticeTimer = setTimeout(() => { node.hidden = true; }, 12000);
 }
 async function safe(fn, button) {
   if (button && busy.has(button)) return;
@@ -81,10 +96,10 @@ function show(id) {
     if (key===id) button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
     button.querySelector('.nav-active-dot').hidden=key!==id;
   }
-  $('title').textContent=names[id];$('breadcrumb').textContent=names[id];
+  setText('title', names[id]);setText('breadcrumb', names[id]);
   if (['datasets','studio'].includes(id)) safe(refreshSamples);
   if (id==='knowledge') safe(refreshKnowledge);
-  if (id==='security') safe(async()=>{$('audit').textContent=pretty(await api('audit'));});
+  if (id==='security') safe(async()=>{setText('audit', pretty(await api('audit')));});
 }
 for (const [id,title] of Object.entries(names)) {
   const button=action('',()=>show(id),'');button.dataset.page=id;
@@ -95,7 +110,7 @@ for (const button of document.querySelectorAll('[data-prompt]')) button.onclick=
 $('menuToggle').onclick=()=>{const open=!document.body.classList.contains('menu-open');document.body.classList.toggle('menu-open',open);$('scrim').hidden=!open;$('menuToggle').setAttribute('aria-expanded',String(open));if(open)document.querySelector('#nav button.active').focus();};
 $('scrim').onclick=closeMenu;
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMenu();});
-function themeLabel() {const dark=document.documentElement.dataset.theme==='dark';$('themeToggle').setAttribute('aria-label',`Switch to ${dark?'light':'dark'} theme`);$('themeToggle').title=`Switch to ${dark?'light':'dark'} theme`;$('themeToggle').textContent=dark?'☀︎':'◐';}
+function themeLabel() {const dark=document.documentElement.dataset.theme==='dark';$('themeToggle').setAttribute('aria-label',`Switch to ${dark?'light':'dark'} theme`);$('themeToggle').title=`Switch to ${dark?'light':'dark'} theme`;setText('themeToggle', dark?'☀︎':'◐');}
 $('themeToggle').onclick=()=>{const next=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=next;try{localStorage.setItem('nimo-theme',next);}catch{}themeLabel();};
 themeLabel();show('chat');
 for (const text of ['Text training','Image labeling','Classification','Bounding boxes · export only','Video frames','Q&A','Reasoning & math examples','Coding examples','Review & provenance','Evaluation & history']) $('trainingTypes').append(el('span',text));
@@ -132,7 +147,7 @@ $('chatForm').onsubmit=event=>{
   },$('sendMessage'));
 };
 $('prompt').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!busy.has($('sendMessage')))$('chatForm').requestSubmit();}};
-$('chatMode').onchange=()=>{$('chatModeHelp').textContent={assistant:'Basic intent responses and sourced notes. Experimental model generation is a separate option.',knowledge:'Returns matching saved notes with their sources. No model weights are updated.',model:'Generates from your active original language model. This small experimental model can be incorrect or nonsensical.'}[$('chatMode').value];};
+$('chatMode').onchange=()=>{setText('chatModeHelp', {assistant:'Basic intent responses and sourced notes. Experimental model generation is a separate option.',knowledge:'Returns matching saved notes with their sources. No model weights are updated.',model:'Generates from your active original language model. This small experimental model can be incorrect or nonsensical.'}[$('chatMode').value]);};
 bind('clearChat',()=>{$('messages').replaceChildren();$('chatWelcome').hidden=false;$('feedbackPanel').hidden=true;lastChat=null;$('prompt').value='';$('prompt').focus();});
 bind('feedback',async()=>{if(!lastChat)throw Error('Send a message before rating an answer.');await api('feedback',{...lastChat,rating:$('rating').value,correction:$('correction').value});notice('Feedback saved locally. You can add a reviewed correction in Training Center.');});
 
@@ -145,7 +160,7 @@ bind('focusTraining',()=>{$('trainingRun').scrollIntoView({behavior:'smooth',blo
 bind('importDataset',async()=>{const file=$('datasetFile').files[0];if(!file)throw Error('Choose a JSON dataset first.');const form=new FormData();form.append('file',file);const result=await api('import',form);notice(`${result.imported} examples processed. New examples need review before training.`);await refreshSamples();});
 function taskHelp() {
   const task=$('task').value;
-  $('taskHelp').textContent={intent:'Learns to recognize basic requests and choose an authored response. It does not generate new answers.',text:'Updates a randomly initialized causal Transformer using answer-focused next-byte training. Small datasets do not create a generally capable assistant.',image:'Trains a separate CNN on approved images with exactly one verified label each. Boxes and OCR are not supported training tasks.'}[task];
+  setText('taskHelp', {intent:'Learns to recognize basic requests and choose an authored response. It does not generate new answers.',text:'Updates a randomly initialized causal Transformer using answer-focused next-byte training. Small datasets do not create a generally capable assistant.',image:'Trains a separate CNN on approved images with exactly one verified label each. Boxes and OCR are not supported training tasks.'}[task]);
   $('contextSize').disabled=task!=='text';$('epochs').value={intent:60,text:80,image:5}[task];$('validationResult').hidden=true;
 }
 $('task').onchange=taskHelp;taskHelp();
@@ -171,7 +186,7 @@ async function refreshSamples() {
   renderSamples();renderImages();renderStats();
 }
 function selectionState() {
-  $('selectionCount').textContent=`${selectedSamples.size} selected`;
+  setText('selectionCount', `${selectedSamples.size} selected`);
   const permitted=selectedSamples.size>0&&$('reviewConfirmed').checked;
   $('approveSelected').disabled=!permitted||busy.has($('approveSelected'));$('rejectSelected').disabled=!permitted||busy.has($('rejectSelected'));
   const checked=visibleSamples.filter(x=>selectedSamples.has(x.id)).length;
@@ -198,7 +213,7 @@ function renderSamples() {
     card.append(actions);$('sampleList').append(card);
   }
   if(!filtered.length)$('sampleList').append(empty(samples.length?'No matching examples':'A clean slate to learn from',samples.length?'Try another search or review filter.':'Add your own examples or load the original assistant starter dataset.','Open Training Center',()=>show('training')));
-  $('pageInfo').textContent=filtered.length?`Page ${datasetPage+1} of ${pages} · ${filtered.length} examples`:'No examples';$('previousPage').disabled=datasetPage===0;$('nextPage').disabled=datasetPage>=pages-1;selectionState();
+  setText('pageInfo', filtered.length?`Page ${datasetPage+1} of ${pages} · ${filtered.length} examples`:'No examples');$('previousPage').disabled=datasetPage===0;$('nextPage').disabled=datasetPage>=pages-1;selectionState();
 }
 $('datasetSearch').oninput=$('datasetStatus').onchange=()=>{datasetPage=0;renderSamples();};
 $('selectVisible').onchange=()=>{for(const row of visibleSamples){if($('selectVisible').checked)selectedSamples.add(row.id);else selectedSamples.delete(row.id);}renderSamples();};
@@ -222,7 +237,7 @@ bind('uploadImages',async()=>{
   await refreshSamples();notice(`${uploaded-duplicates} images added. ${duplicates} duplicates skipped.${errors.length?' '+errors.join(' · '):''}`,errors.length>0);
 });
 function renderImages() {
-  const images=samples.filter(x=>x.kind==='image');$('imageCount').textContent=images.length;$('imageList').replaceChildren();
+  const images=samples.filter(x=>x.kind==='image');setText('imageCount', images.length);$('imageList').replaceChildren();
   for(const row of images) {
     const button=action('',()=>selectImage(row),'');button.classList.toggle('selected',selected?.id===row.id);
     const image=el('img');image.src='/api/images/'+row.id;image.alt=row.content.labels.join(', ')||'Unlabeled image';image.loading='lazy';button.append(image,el('div',row.content.labels.join(', ')||'Needs a label'),badge(row.status,row.status));$('imageList').append(button);
@@ -232,13 +247,13 @@ function renderImages() {
   for(const id of ['saveLabels','suggest','previousImage','nextImage','clearBoxes','undoBox'])$(id).disabled=!available;
 }
 function selectImage(row) {
-  selected=row;boxes=structuredClone(row.content.boxes);suggestion=null;$('labels').value=row.content.labels.join(', ');$('notes').value=row.content.notes||'';$('annotation').value=row.content.annotation;$('approveImage').checked=row.status==='approved';$('selectedInfo').textContent=`Original ${row.content.width} × ${row.content.height} · ${row.status}`;
-  $('suggestions').textContent='Request a local classifier suggestion, or label the image yourself.';$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=true;
+  selected=row;boxes=structuredClone(row.content.boxes);suggestion=null;$('labels').value=row.content.labels.join(', ');$('notes').value=row.content.notes||'';$('annotation').value=row.content.annotation;$('approveImage').checked=row.status==='approved';setText('selectedInfo', `Original ${row.content.width} × ${row.content.height} · ${row.status}`);
+  setText('suggestions', 'Request a local classifier suggestion, or label the image yourself.');$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=true;
   const image=new Image();image.onload=()=>{if(selected?.id!==row.id)return;loadedImage=image;const scale=Math.min(1,760/image.width);$('canvas').width=Math.round(image.width*scale);$('canvas').height=Math.round(image.height*scale);draw();};image.src='/api/images/'+row.id;renderImages();
 }
 function draw(extra) {
   if(!loadedImage)return;const canvas=$('canvas'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(loadedImage,0,0,canvas.width,canvas.height);ctx.strokeStyle='#9d83ff';ctx.fillStyle='#9d83ff';ctx.lineWidth=2;ctx.font='14px sans-serif';
-  for(const box of [...boxes,...(extra?[extra]:[])]){ctx.strokeRect(box.x*canvas.width,box.y*canvas.height,box.w*canvas.width,box.h*canvas.height);ctx.fillText(box.label,box.x*canvas.width+3,box.y*canvas.height+16);}$('boxCount').textContent=`${boxes.length} boxes`;
+  for(const box of [...boxes,...(extra?[extra]:[])]){ctx.strokeRect(box.x*canvas.width,box.y*canvas.height,box.w*canvas.width,box.h*canvas.height);ctx.fillText(box.label,box.x*canvas.width+3,box.y*canvas.height+16);}setText('boxCount', `${boxes.length} boxes`);
 }
 function position(event) {const rect=$('canvas').getBoundingClientRect();return {x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))};}
 function box(end) {return {x:Math.min(drawStart.x,end.x),y:Math.min(drawStart.y,end.y),w:Math.abs(end.x-drawStart.x),h:Math.abs(end.y-drawStart.y),label:$('boxLabel').value.trim()};}
@@ -249,9 +264,9 @@ $('canvas').onpointercancel=()=>{drawStart=null;draw();};
 bind('clearBoxes',()=>{boxes=[];draw();});bind('undoBox',()=>{boxes.pop();draw();});
 for(const [id,direction] of [['previousImage',-1],['nextImage',1]])bind(id,()=>{const images=samples.filter(x=>x.kind==='image');if(!images.length)return;const index=images.findIndex(x=>x.id===selected?.id);selectImage(images[(index+direction+images.length)%images.length]);});
 bind('saveLabels',async()=>{if(!selected)throw Error('Choose an image first.');await api('samples/'+selected.id,{labels:$('labels').value.split(',').map(x=>x.trim()).filter(Boolean),boxes,notes:$('notes').value,annotation:$('annotation').value,status:$('approveImage').checked?'approved':'pending'},'PATCH');await refreshSamples();selected=samples.find(x=>x.id===selected.id);notice($('approveImage').checked?'Labels saved and image approved for training.':'Labels saved. The image remains pending training approval.');});
-bind('suggest',async()=>{if(!selected)throw Error('Choose an image first.');const result=await api('classify/'+selected.id,{});suggestion=result.suggestions[0];$('suggestions').textContent=`Suggested: ${suggestion.label} · ${percent(suggestion.score)} uncalibrated score. This is unverified; compare it with the image before accepting.`;$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=false;});
+bind('suggest',async()=>{if(!selected)throw Error('Choose an image first.');const result=await api('classify/'+selected.id,{});suggestion=result.suggestions[0];setText('suggestions', `Suggested: ${suggestion.label} · ${percent(suggestion.score)} uncalibrated score. This is unverified; compare it with the image before accepting.`);$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=false;});
 bind('acceptSuggestion',()=>{if(!suggestion)return;$('labels').value=suggestion.label;$('annotation').value='verified';$('approveImage').checked=false;notice('Suggestion copied into the editor. Check it, then explicitly save and approve.');});
-bind('rejectSuggestion',()=>{suggestion=null;$('suggestions').textContent='Suggestion rejected. Your existing labels were kept.';$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=true;});
+bind('rejectSuggestion',()=>{suggestion=null;setText('suggestions', 'Suggestion rejected. Your existing labels were kept.');$('acceptSuggestion').disabled=$('rejectSuggestion').disabled=true;});
 
 function renderModels() {
   const key=pretty(state.models);if(key===modelRenderKey)return;modelRenderKey=key;$('modelList').replaceChildren();
@@ -274,7 +289,7 @@ async function refreshKnowledge() {
 $('knowledgeForm').onsubmit=event=>{event.preventDefault();safe(async()=>{await api('knowledge',{text:$('knowledgeText').value,source:$('knowledgeSource').value});notice('Knowledge saved locally. Model weights were not changed.');$('knowledgeText').value='';await refreshKnowledge();},$('knowledgeForm').querySelector('button'));};
 $('online').onchange=()=>safe(async()=>{try{const result=await api('network',{online:$('online').checked});notice(result.online?'Wikipedia search enabled. An explicit search sends the query online.':'Offline mode is on.');await poll();}catch(error){$('online').checked=Boolean(state.online);throw error;}});
 bind('search',async()=>{const result=await api('search',{text:$('searchQuery').value});$('searchResults').replaceChildren();for(const item of result.results){const paragraph=el('p'),link=el('a',item.title);link.href=item.url;link.target='_blank';link.rel='noopener noreferrer';paragraph.append(link,el('small','Retrieved '+new Date(item.retrieved).toLocaleString()));$('searchResults').append(paragraph);}notice('Sources retrieved. Verify important claims; nothing was added to memory or training.');});
-bind('extractVideo',async()=>{const file=$('videoFile').files[0];if(!file)throw Error('Choose a local video first.');const form=new FormData();form.append('file',file);form.append('source',$('videoSource').value);form.append('license',$('videoLicense').value);const result=await api('video',form);$('videoResult').textContent=`${result.frames.length} frames extracted. Open Image Labeling Studio to review them.\n\n`+pretty(result.frames);await refreshSamples();notice('Video frames prepared locally and left pending annotation.');});
+bind('extractVideo',async()=>{const file=$('videoFile').files[0];if(!file)throw Error('Choose a local video first.');const form=new FormData();form.append('file',file);form.append('source',$('videoSource').value);form.append('license',$('videoLicense').value);const result=await api('video',form);setText('videoResult', `${result.frames.length} frames extracted. Open Image Labeling Studio to review them.\n\n`+pretty(result.frames));await refreshSamples();notice('Video frames prepared locally and left pending annotation.');});
 
 function renderStats() {
   const approved=samples.filter(x=>x.status==='approved').length,pending=samples.filter(x=>x.status==='pending').length;
@@ -291,15 +306,15 @@ function renderJob() {
   if(!job)return;
   const p=job.progress,total=p.epochs||job.config.epochs;
   const complete=job.status==='completed',fraction=complete?1:Math.max(0,Math.min(1,((p.epoch||1)-1+(p.batch||0)/(p.batches||1))/total));
-  $('jobBadge').textContent=job.status.replaceAll('_',' ');$('jobBadge').className='badge '+job.status;
-  $('jobTitle').textContent=`${taskNames[job.task]} · ${job.status}`;$('progress').value=fraction*100;$('progressLabel').textContent=Math.round(fraction*100)+'%';
-  $('jobSummary').textContent=p.error || (complete?(p.metrics?.accepted?'Validation criteria passed. This version is now available in Model Manager.':'Experiment saved. Acceptance criteria were not met, so your active version was retained.'):`Epoch ${p.epoch||0} of ${total} · Batch ${p.batch||0} of ${p.batches||'…'}${p.device?' · '+p.device.toUpperCase():''}. Commands apply between batches.`);
-  $('jobMetrics').replaceChildren();for(const [label,value] of [['Training loss',number(p.loss)],['Validation loss',number(p.validation?.loss)],['Duration',p.duration_s?number(p.duration_s,1)+'s':'—']]){const node=el('div',label,'mini-metric');node.append(el('b',value));$('jobMetrics').append(node);}$('job').textContent=pretty(job);
+  setText('jobBadge', job.status.replaceAll('_',' '));$('jobBadge').className='badge '+job.status;
+  setText('jobTitle', `${taskNames[job.task]} · ${job.status}`);$('progress').value=fraction*100;setText('progressLabel', Math.round(fraction*100)+'%');
+  setText('jobSummary', p.error || (complete?(p.metrics?.accepted?'Validation criteria passed. This version is now available in Model Manager.':'Experiment saved. Acceptance criteria were not met, so your active version was retained.'):`Epoch ${p.epoch||0} of ${total} · Batch ${p.batch||0} of ${p.batches||'…'}${p.device?' · '+p.device.toUpperCase():''}. Commands apply between batches.`));
+  $('jobMetrics').replaceChildren();for(const [label,value] of [['Training loss',number(p.loss)],['Validation loss',number(p.validation?.loss)],['Duration',p.duration_s?number(p.duration_s,1)+'s':'—']]){const node=el('div',label,'mini-metric');node.append(el('b',value));$('jobMetrics').append(node);}setText('job', pretty(job));
 }
 async function poll() {
-  state=await api('status');const h=state.hardware;$('resources').textContent=`${h.available_gb} GB free · ${state.online?'ONLINE':'OFFLINE'}`;$('online').checked=state.online;$('hardware').textContent=pretty(h);renderStats();renderJob();renderModels();
+  state=await api('status');const h=state.hardware;setText('resources', `${h.available_gb} GB free · ${state.online?'ONLINE':'OFFLINE'}`);$('online').checked=state.online;setText('hardware', pretty(h));renderStats();renderJob();renderModels();
 }
 (async()=>{
-  try {const result=await api('bootstrap');token=result.token;await Promise.all([poll(),refreshSamples(),refreshKnowledge()]);const starter=await api('starter');$('starterCount').textContent=starter.examples;setInterval(()=>{if(!document.hidden)safe(poll);},2500);}
+  try {const result=await api('bootstrap');token=result.token;await Promise.all([poll(),refreshSamples(),refreshKnowledge()]);const starter=await api('starter');setText('starterCount', starter.examples);setInterval(()=>{if(!document.hidden)safe(poll);},2500);}
   catch(error){notice(error.message,true);}
 })();
