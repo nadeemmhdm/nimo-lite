@@ -6,6 +6,7 @@ faster and preserves the probe's next-token decision within a conservative error
 """
 from __future__ import annotations
 
+import gc
 import os
 import time
 
@@ -48,6 +49,19 @@ def _quality_guard(reference: torch.Tensor, candidate: torch.Tensor) -> dict:
     }
 
 
+def _architecture_count(model) -> int | None:
+    try:
+        return int(getattr(model, "_nimo_parameter_count", model.parameter_count()))
+    except Exception:
+        return None
+
+
+def _attach_metadata(model, parameter_count, decision) -> None:
+    if parameter_count is not None:
+        setattr(model, "_nimo_parameter_count", int(parameter_count))
+    setattr(model, "_nimo_quantization_decision", decision)
+
+
 def _warmup(model) -> None:
     setting = os.environ.get("NIMO_WARMUP", "auto").strip().lower()
     if setting in {"0", "off", "false", "no"}:
@@ -76,27 +90,36 @@ def install_inference_policy() -> None:
 
     def benchmarked_quantize(model, mode="auto", device="cpu"):
         requested = (mode or "auto").lower()
+        original_parameter_count = _architecture_count(model)
         if requested != "auto" or device != "cpu":
             selected, qmode = original(model, requested, device)
-            setattr(selected, "_nimo_quantization_decision", {
-                "requested": requested,
-                "selected": qmode,
-                "benchmark": "explicit mode" if requested != "auto" else "accelerator capability",
-            })
+            _attach_metadata(
+                selected,
+                original_parameter_count,
+                {
+                    "requested": requested,
+                    "selected": qmode,
+                    "benchmark": "explicit mode" if requested != "auto" else "accelerator capability",
+                },
+            )
             _warmup(selected)
             return selected, qmode
 
         fp32 = model.float().eval()
         candidate, candidate_mode = original(fp32, "int8", "cpu")
         if candidate_mode != "int8":
-            setattr(fp32, "_nimo_quantization_decision", {
-                "requested": "auto", "selected": "fp32", "reason": "INT8 unavailable",
-            })
+            _attach_metadata(
+                fp32,
+                original_parameter_count,
+                {"requested": "auto", "selected": "fp32", "reason": "INT8 unavailable"},
+            )
             _warmup(fp32)
             return fp32, "fp32"
 
         vocab = max(9, int(getattr(fp32, "vocab_size", 512)))
-        probe = torch.tensor([[8 % vocab, 9 % vocab, 10 % vocab, 11 % vocab, 12 % vocab, 13 % vocab, 14 % vocab, 15 % vocab]])
+        probe = torch.tensor(
+            [[8 % vocab, 9 % vocab, 10 % vocab, 11 % vocab, 12 % vocab, 13 % vocab, 14 % vocab, 15 % vocab]]
+        )
         try:
             fp_time, reference = _timed_forward(fp32, probe, "cpu")
             int8_time, quantized = _timed_forward(candidate, probe, "cpu")
@@ -114,16 +137,29 @@ def install_inference_policy() -> None:
                 "quality_guard": quality,
                 "minimum_speed_gain": 0.05,
             }
-            setattr(selected, "_nimo_quantization_decision", decision)
+            _attach_metadata(selected, original_parameter_count, decision)
+            # Drop the rejected representation before warmup. The process peak may still
+            # include the short-lived comparison copy, but steady-state chat memory does not.
+            if use_int8:
+                fp32 = None
+            else:
+                candidate = None
+            gc.collect()
             _warmup(selected)
             return selected, qmode
         except Exception as exc:
-            setattr(fp32, "_nimo_quantization_decision", {
-                "requested": "auto",
-                "selected": "fp32",
-                "reason": "benchmark fallback",
-                "error": type(exc).__name__,
-            })
+            candidate = None
+            gc.collect()
+            _attach_metadata(
+                fp32,
+                original_parameter_count,
+                {
+                    "requested": "auto",
+                    "selected": "fp32",
+                    "reason": "benchmark fallback",
+                    "error": type(exc).__name__,
+                },
+            )
             _warmup(fp32)
             return fp32, "fp32"
 
