@@ -1,7 +1,10 @@
+import json
+
 import torch
 
 from nimo.fast_inference import get_engine, reset_inference_cache
 from nimo.models import NimoLMV2
+from nimo.store import Store, now, uid
 from nimo.tokenizer import NimoTokenizer, train_tokenizer
 
 
@@ -125,3 +128,37 @@ def test_tokenizer_artifact_is_reused_and_model_sessions_are_separate():
     assert eb.session.cache.length == 0
     reset_inference_cache(a)
     assert ea.session.cache.length == 0
+
+
+def test_runtime_model_cache_does_not_reload_same_model(monkeypatch, tmp_path):
+    import nimo.runtime as runtime
+
+    store = Store(tmp_path)
+    ident = uid()
+    relative = "models/cache-test.pt"
+    (tmp_path / relative).write_bytes(b"placeholder")
+    with store.db() as db:
+        db.execute(
+            "INSERT INTO models(id,task,path,metrics,active,created) VALUES(?,?,?,?,?,?)",
+            (ident, "text", relative, json.dumps({"accepted": True}), 1, now()),
+        )
+
+    calls = []
+    loaded_model = _model()
+
+    def fake_load(path):
+        calls.append(str(path))
+        return loaded_model, {"task": "text", "architecture": {"version": 3}}
+
+    monkeypatch.setattr(runtime, "load_model", fake_load)
+    monkeypatch.setattr(runtime, "quantize_for_inference", lambda model, mode, device: (model, "fp32"))
+    cache = runtime.ModelCache(store)
+    first = cache.get(quantization="fp32")
+    second = cache.get(quantization="fp32")
+    assert first[0] is second[0] is loaded_model
+    assert len(calls) == 1
+
+    cache.clear()
+    third = cache.get(quantization="fp32")
+    assert third[0] is loaded_model
+    assert len(calls) == 2
