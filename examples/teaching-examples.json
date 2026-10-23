@@ -1,0 +1,58 @@
+[
+  {
+    "question": "What is Nimo Lite?",
+    "answer": "An experimental local AI training workbench.",
+    "category": "qa",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "Where are my images stored?",
+    "answer": "In the local data directory unless you export them.",
+    "category": "qa",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "Does saving a note update weights?",
+    "answer": "No. Knowledge storage and model training are separate.",
+    "category": "qa",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "What is 2 + 3?",
+    "answer": "5.",
+    "category": "mathematics",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "Translate hello to Malayalam.",
+    "answer": "നമസ്കാരം",
+    "category": "Malayalam",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "Manglish greeting example",
+    "answer": "Namaskaram! Sukham ano?",
+    "category": "Manglish",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "Python function that adds two numbers",
+    "answer": "def add(a, b):\n    return a + b",
+    "category": "coding",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  },
+  {
+    "question": "What does offline mean here?",
+    "answer": "Core local features do not require an internet connection after dependencies are installed.",
+    "category": "qa",
+    "source": "Original Nimo Lite demonstration example",
+    "license": "CC0-1.0"
+  }
+]

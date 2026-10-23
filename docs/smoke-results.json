@@ -1,0 +1,191 @@
+{
+  "purpose": "Synthetic pipeline smoke test only; no real-world accuracy claim",
+  "hardware": {
+    "os": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "cpu": "x86_64",
+    "cores": 3,
+    "ram_gb": 8.0,
+    "available_gb": 6.85,
+    "disk_free_gb": 4.86,
+    "tier": 8,
+    "batch_size": 4,
+    "context": 128,
+    "image_size": 32,
+    "threads": 1,
+    "process_ram_mb": 365.1,
+    "cpu_percent": 0.0
+  },
+  "accelerator": {
+    "device": "cpu",
+    "name": "CPU",
+    "vram_gb": 0
+  },
+  "python": "3.12.14",
+  "torch": "2.14.1+cpu",
+  "parameters": {
+    "text": 124928,
+    "image_two_classes": 38050
+  },
+  "artifact_directory": "/tmp/nimo-smoke-azoag964",
+  "runs": {
+    "image": {
+      "id": "d363ec9a3b354c708fad8b756dd078e3",
+      "epochs": 6,
+      "metrics": {
+        "validation": {
+          "loss": 2.288792165927589e-05,
+          "accuracy": 1.0,
+          "count": 2,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "confusion_matrix": [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        "test": {
+          "loss": 2.288792165927589e-05,
+          "accuracy": 1.0,
+          "count": 2,
+          "precision_macro": 1.0,
+          "recall_macro": 1.0,
+          "f1_macro": 1.0,
+          "confusion_matrix": [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        "baseline_validation": {
+          "loss": 0.6913458108901978,
+          "accuracy": 0.5,
+          "count": 2,
+          "precision_macro": 0.25,
+          "recall_macro": 0.5,
+          "f1_macro": 0.3333333333333333,
+          "confusion_matrix": [
+            [
+              0,
+              1
+            ],
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        "previous_validation": null,
+        "accepted": true,
+        "acceptance": "Validation loss improves; image accuracy >= max(0.5, reference). Test does not select versions.",
+        "duration_s": 0.074114486000326,
+        "split": {
+          "train": [
+            "da9fc1cd78f0418b9ea094bfa5748054",
+            "8d9c0037124a4f48835fb58de02bebce",
+            "74889697653644a0a40179e7b6c5e325",
+            "ddaf5ac8768e4206b1610f80495c2d2d",
+            "58300fb135a6451587638caac95c2ce3",
+            "0857bc627d8144fba8c72eb6e9d29aad",
+            "ee996ddcdae74625a2fc58dc9fd86ab0",
+            "cd2c43227be14ddda2925ec9801faf8c"
+          ],
+          "validation": [
+            "4d6c063c4e874f06acd6b531f1337ce0",
+            "7a61665377c14040b159cd80c29e4f3d"
+          ],
+          "test": [
+            "e5f90e7e53f2418ea328fe7ee666c07b",
+            "e1be9b21420f46fda6b45ee7ba623a20"
+          ]
+        },
+        "dataset_versions": {
+          "e1be9b21420f46fda6b45ee7ba623a20": 2,
+          "cd2c43227be14ddda2925ec9801faf8c": 2,
+          "ee996ddcdae74625a2fc58dc9fd86ab0": 2,
+          "0857bc627d8144fba8c72eb6e9d29aad": 2,
+          "7a61665377c14040b159cd80c29e4f3d": 2,
+          "58300fb135a6451587638caac95c2ce3": 2,
+          "4d6c063c4e874f06acd6b531f1337ce0": 2,
+          "da9fc1cd78f0418b9ea094bfa5748054": 2,
+          "ddaf5ac8768e4206b1610f80495c2d2d": 2,
+          "74889697653644a0a40179e7b6c5e325": 2,
+          "8d9c0037124a4f48835fb58de02bebce": 2,
+          "e5f90e7e53f2418ea328fe7ee666c07b": 2
+        },
+        "seed": 42,
+        "pretrained": false
+      }
+    },
+    "text": {
+      "id": "7d3ad397c0d44869932dfa564b445bac",
+      "epochs": 2,
+      "metrics": {
+        "validation": {
+          "loss": 3.450993177625868,
+          "accuracy": 0.4888888888888889,
+          "count": 45,
+          "perplexity": 31.531693334761453,
+          "note": "Byte prediction metrics do not establish reasoning or conversation ability"
+        },
+        "test": {
+          "loss": 3.4848259819878473,
+          "accuracy": 0.4888888888888889,
+          "count": 45,
+          "perplexity": 32.616750713854074,
+          "note": "Byte prediction metrics do not establish reasoning or conversation ability"
+        },
+        "baseline_validation": {
+          "loss": 5.655143568250868,
+          "accuracy": 0.0,
+          "count": 45,
+          "perplexity": 285.7575054868948,
+          "note": "Byte prediction metrics do not establish reasoning or conversation ability"
+        },
+        "previous_validation": null,
+        "accepted": true,
+        "acceptance": "Validation loss improves; image accuracy >= max(0.5, reference). Test does not select versions.",
+        "duration_s": 0.036828298000727955,
+        "split": {
+          "train": [
+            "90bdf929413b41858ef60db4c3cacfe8",
+            "3ecb1949cca3434d86362e5fa3e357f0",
+            "790f995fc5d3463b9186b276d0c585e6",
+            "1d0353e5e24a421c91d6a677d825e443",
+            "bbc30576b3084b3d8a2bb2daeaa92fc7",
+            "4d0d7c99624d4db9b649d8946c098a15"
+          ],
+          "validation": [
+            "572ee2828fc64ebda098d96ca2a08369"
+          ],
+          "test": [
+            "922aea040024453bb4c1a02768ccc8fd"
+          ]
+        },
+        "dataset_versions": {
+          "790f995fc5d3463b9186b276d0c585e6": 2,
+          "922aea040024453bb4c1a02768ccc8fd": 2,
+          "3ecb1949cca3434d86362e5fa3e357f0": 2,
+          "90bdf929413b41858ef60db4c3cacfe8": 2,
+          "bbc30576b3084b3d8a2bb2daeaa92fc7": 2,
+          "572ee2828fc64ebda098d96ca2a08369": 2,
+          "4d0d7c99624d4db9b649d8946c098a15": 2,
+          "1d0353e5e24a421c91d6a677d825e443": 2
+        },
+        "seed": 42,
+        "pretrained": false
+      }
+    }
+  }
+}
