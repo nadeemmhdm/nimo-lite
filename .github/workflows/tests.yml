@@ -15,4 +15,5 @@ jobs:
       - run: python -m compileall -q nimo scripts
       - run: python -m py_compile bootstrap.py
       - run: node --check nimo/static/runtime-enhancements.js
+      - run: node --check nimo/static/runtime-fixes.js
       - run: python -m pytest -q
