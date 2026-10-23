@@ -22,6 +22,23 @@ def _sync(device: str) -> None:
         torch.mps.synchronize()
 
 
+def _trim_allocator() -> None:
+    """Best-effort release of free libc heap pages after one-time model conversion."""
+    gc.collect()
+    if os.name != "posix":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None)
+        trim = getattr(libc, "malloc_trim", None)
+        if trim is not None:
+            trim(0)
+    except Exception:
+        # malloc_trim is a glibc optimization, never a correctness requirement.
+        pass
+
+
 def _timed_forward(model, probe, device: str) -> tuple[float, torch.Tensor]:
     samples = []
     output = None
@@ -76,7 +93,6 @@ def _warmup(model) -> None:
             engine.prefill([token])
             engine.reset()
     except Exception:
-        # Warmup is an optimization only and must never make model loading fail.
         return
 
 
@@ -138,18 +154,16 @@ def install_inference_policy() -> None:
                 "minimum_speed_gain": 0.05,
             }
             _attach_metadata(selected, original_parameter_count, decision)
-            # Drop the rejected representation before warmup. The process peak may still
-            # include the short-lived comparison copy, but steady-state chat memory does not.
             if use_int8:
                 fp32 = None
             else:
                 candidate = None
-            gc.collect()
+            _trim_allocator()
             _warmup(selected)
             return selected, qmode
         except Exception as exc:
             candidate = None
-            gc.collect()
+            _trim_allocator()
             _attach_metadata(
                 fp32,
                 original_parameter_count,
