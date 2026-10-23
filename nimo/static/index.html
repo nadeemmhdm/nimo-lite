@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>Nimo Lite · Your local assistant</title>
-  <script src="/static/theme.js?v=20261023-domfix1"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20261023-domfix1">
+  <script src="/static/theme.js?v=20261023-modelrecover1"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20261023-modelrecover1">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -61,6 +61,6 @@
   <section id="security" class="page" hidden><div class="page-intro"><div><h2>Local by choice. Clear by design.</h2><p>You decide what is stored, what is trained, and when a query goes online.</p></div></div><div class="grid"><div class="card"><span class="eyebrow">PRIVACY & PERMISSIONS</span><h2>Your workspace boundaries</h2><ul class="feature-list"><li>Local data and model files stay on this device.</li><li>Models have no shell or unrestricted network tools.</li><li>Dataset text and model output are always untrusted.</li><li>Training examples need explicit approval.</li></ul><p class="muted">Storage is not encrypted. Protect your OS account and disk. Back up the data directory while the app is stopped. Deleting examples does not remove what checkpoints may have learned.</p></div><div class="card"><span class="eyebrow">OPTIONAL INTERNET</span><h2>Search with sources</h2><label class="check-label"><input id="online" type="checkbox"> Enable Wikipedia search</label><p class="field-help">Only an explicit search query leaves this device. Results are not automatically saved or used for training.</p><label for="searchQuery">Search query</label><input id="searchQuery" placeholder="What would you like to look up?"><button id="search" class="button-secondary">Search Wikipedia ↗︎</button><div id="searchResults"></div><p class="muted">Single-source search. Verify important claims independently.</p></div></div><details class="advanced card"><summary>Dataset activity log</summary><pre id="audit"></pre></details></section>
   <section id="performance" class="page" hidden><div class="page-intro"><div><h2>Make room for learning.</h2><p>Live resource information helps you choose manageable local experiments.</p></div></div><div id="performanceStats" class="stat-grid"></div><div class="card"><h2>Conservative by default</h2><p>One training worker, at most two CPU threads, and small model shapes. Available memory is checked before training and between batches. This is not a hard OS memory quota.</p><details class="advanced"><summary>Machine & process details</summary><pre id="hardware"></pre></details></div></section>
 </main>
-<script src="/static/app.js?v=20261023-domfix1" defer></script>
+<script src="/static/app.js?v=20261023-modelrecover1" defer></script>
 </body>
 </html>
