@@ -124,6 +124,8 @@ class NimoLMV2(nn.Module):
         self.position = nn.Embedding(context, width)
         self.blocks = nn.ModuleList([NimoBlock(width, heads, ff) for _ in range(layers)])
         self.norm = nn.LayerNorm(width)
+        self.head = nn.Linear(width, ByteTokenizer.vocab_size, bias=False)
+        self.head.weight = self.token.weight
 
     def forward(self, tokens, cache=None, use_cache=False):
         length = tokens.shape[1]
@@ -138,7 +140,7 @@ class NimoLMV2(nn.Module):
             x, saved = block(x, cache=layer_cache, use_cache=use_cache)
             if use_cache:
                 next_cache.append(saved)
-        logits = F.linear(self.norm(x), self.token.weight)
+        logits = self.head(self.norm(x))
         return (logits, next_cache) if use_cache else logits
 
     @torch.inference_mode()
