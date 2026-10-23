@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from nimo.memory import LocalMemory, extract_memories
 from nimo.models import MODEL_PROFILES, build_text_model, load_model
-from nimo.runtime import REASONING, _safe_calculate, create_app
-from nimo.store import Store
+from nimo.runtime import ModelCache, REASONING, _safe_calculate, create_app
+from nimo.store import Store, now, uid
 from nimo.training import run_job, start_job
 from nimo.web_access import _public_host
 
@@ -91,6 +91,36 @@ def test_local_memory_is_useful_and_filters_sensitive_data(tmp_path):
     assert memory.list() == []
 
 
+def test_model_cache_recovers_accepted_inactive_legacy_model(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    ident = uid()
+    checkpoint = store.root / "models" / f"{ident}.pt"
+    checkpoint.write_bytes(b"synthetic checkpoint fixture")
+    with store.db() as db:
+        db.execute(
+            "INSERT INTO models VALUES(?,?,?,?,?,?)",
+            (ident, "instruction", f"models/{ident}.pt", json.dumps({"accepted": True}), 0, now()),
+        )
+
+    class DummyModel:
+        def to(self, device):
+            return self
+
+    monkeypatch.setattr("nimo.runtime.load_model", lambda path: (DummyModel(), {"task": "text"}))
+    monkeypatch.setattr(
+        "nimo.runtime.quantize_for_inference",
+        lambda model, quantization, device: (model, "fp32"),
+    )
+    _, _, row = ModelCache(store).get()
+    assert row["id"] == ident
+    assert row["task"] == "text"
+    assert row["active"] == 1
+    with store.db() as db:
+        saved = db.execute("SELECT task,active FROM models WHERE id=?", (ident,)).fetchone()
+    assert saved["task"] == "text"
+    assert saved["active"] == 1
+
+
 def test_runtime_routes_reasoning_memory_and_no_intent_chat_fallback(tmp_path):
     app = create_app(tmp_path)
     routes = [(getattr(r, 'path', ''), getattr(r, 'methods', set())) for r in app.router.routes]
@@ -107,5 +137,8 @@ def test_runtime_routes_reasoning_memory_and_no_intent_chat_fallback(tmp_path):
         result = client.post('/api/chat', json={'text':'Hello','reasoning':'fast'})
         assert result.status_code == 400
         assert 'Nimo text model' in result.json()['detail']
+        knowledge = client.post('/api/chat', json={'text':'Hello','mode':'knowledge'})
+        assert knowledge.status_code == 200
+        assert knowledge.json()['mode'] == 'knowledge-only'
         saved = client.post('/api/memory', json={'text':'I prefer concise technical answers'}).json()['saved']
         assert saved

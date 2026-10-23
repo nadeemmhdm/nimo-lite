@@ -73,7 +73,8 @@ def test_dashboard_assets_are_cache_busted_and_missing_text_targets_are_guarded(
     html = (static / "index.html").read_text(encoding="utf-8")
     app_js = (static / "app.js").read_text(encoding="utf-8")
     theme_js = (static / "theme.js").read_text(encoding="utf-8")
-    version = "20261023-domfix1"
+    runtime_js = (static / "runtime-enhancements.js").read_text(encoding="utf-8")
+    version = "20261023-modelrecover1"
 
     for asset in ("theme.js", "style.css", "app.js"):
         assert f"/static/{asset}?v={version}" in html
@@ -81,6 +82,9 @@ def test_dashboard_assets_are_cache_busted_and_missing_text_targets_are_guarded(
     assert f"/static/runtime-fixes.js?v={version}" in theme_js
     assert "function setText(id, value)" in app_js
     assert "dashboard markup is missing #notice" in app_js
+    assert "if(body.mode==='knowledge')" in runtime_js
+    assert "api('chat',body)" in runtime_js
+    assert "Open Training Center" in runtime_js
     for ident in ("notice", "starterCount", "resources", "hardware", "jobBadge", "jobTitle", "jobSummary", "job", "pageInfo", "imageCount"):
         assert f'id="{ident}"' in html
 
