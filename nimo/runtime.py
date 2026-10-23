@@ -162,16 +162,65 @@ class ModelCache:
         self.lock = threading.RLock()
         self.loaded = {}
 
+    @staticmethod
+    def _accepted(row):
+        try:
+            return json.loads(row["metrics"]).get("accepted") is True
+        except (TypeError, ValueError):
+            return False
+
     def get(self, model_id=None, quantization="auto"):
+        # Older local databases may label native language checkpoints by their
+        # training stage ("pretrain"/"instruction") rather than runtime task ("text").
         with self.store.db() as db:
             if model_id:
                 safe_id(model_id)
-                row = db.execute("SELECT * FROM models WHERE id=? AND task='text'", (model_id,)).fetchone()
+                row = db.execute(
+                    "SELECT * FROM models WHERE id=? AND task IN ('text','pretrain','instruction')",
+                    (model_id,),
+                ).fetchone()
             else:
-                row = db.execute("SELECT * FROM models WHERE task='text' AND active=1 ORDER BY created DESC LIMIT 1").fetchone()
+                row = db.execute(
+                    "SELECT * FROM models WHERE task='text' AND active=1 ORDER BY created DESC LIMIT 1"
+                ).fetchone()
+                if not row:
+                    # Prefer a previously active legacy-stage model, but only if it
+                    # passed evaluation. Then normalize its registry task below.
+                    candidate = db.execute(
+                        "SELECT * FROM models WHERE task IN ('pretrain','instruction') AND active=1 ORDER BY created DESC LIMIT 1"
+                    ).fetchone()
+                    if candidate and self._accepted(candidate):
+                        row = candidate
+                if not row:
+                    # Recover accepted saved checkpoints if an activation flag was
+                    # lost during an interrupted update or older-version migration.
+                    candidates = db.execute(
+                        "SELECT * FROM models WHERE task IN ('text','pretrain','instruction') ORDER BY created DESC"
+                    ).fetchall()
+                    row = next((candidate for candidate in candidates if self._accepted(candidate)), None)
+                    if row:
+                        db.execute("UPDATE models SET active=0 WHERE task IN ('text','pretrain','instruction')")
+                        db.execute(
+                            "UPDATE models SET task='text',active=1 WHERE id=?",
+                            (row["id"],),
+                        )
+                        row = dict(row)
+                        row["task"] = "text"
+                        row["active"] = 1
+            if row and row["task"] != "text":
+                db.execute("UPDATE models SET task='text' WHERE id=?", (row["id"],))
+                row = dict(row)
+                row["task"] = "text"
+            elif row:
+                row = dict(row)
         if not row:
-            raise ValueError("No active Nimo text model. Train and activate a pretrain/instruction model first.")
-        row = dict(row)
+            if model_id:
+                raise ValueError("Selected Nimo text model was not found. Refresh Model Manager and choose an available model.")
+            raise ValueError(
+                "No accepted Nimo text model is available. In Training Center, prepare and approve corpus data, "
+                "train the tokenizer, run pretraining, then instruction tuning; activate an accepted version "
+                "in Model Manager. Local knowledge mode works without a text model."
+            )
         key = (row["id"], quantization)
         with self.lock:
             if key in self.loaded:
