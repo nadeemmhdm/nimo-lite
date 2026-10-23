@@ -1,0 +1,162 @@
+name: train-starter-open-data
+
+on:
+  push:
+    branches: ['train/starter-open-data-model']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      HF_DATASETS_DISABLE_PROGRESS_BARS: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      NIMO_MAX_DOCUMENTS: '5000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install Nimo open-data support
+        run: python -m pip install -e '.[open-data]'
+      - name: Import open datasets and train starter Nimo
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          from nimo.corpus import CorpusStore
+          from nimo.lm_training import run_job, start_job
+          from nimo.open_data import _train_tokenizer_from_corpus, import_dataset
+          from nimo.open_data_sources import DATASETS, load_source
+          from nimo.store import Store
+
+          root = Path('training-data')
+          store = Store(root)
+          corpus = CorpusStore(store)
+
+          def import_wikipedia(key, language):
+              spec = DATASETS[key]
+              split_counts = {'train': 0, 'validation': 0, 'test': 0}
+              added = 0
+              duplicates = 0
+              for row in load_source(spec):
+                  text = str(row.get('text') or '').strip()
+                  if len(text) < 200:
+                      continue
+                  # This artifact is a workflow proof checkpoint. Bound each article so
+                  # the shared CPU runner trains on representative passages, not entire long pages.
+                  text = text[:3072]
+                  title = str(row.get('title') or '')[:300]
+                  source = str(row.get('url') or f'https://huggingface.co/datasets/{spec.dataset}')
+                  result = corpus.add(
+                      text,
+                      source,
+                      spec.license,
+                      kind='raw',
+                      language=language,
+                      category='wikipedia-starter',
+                      status='approved',
+                      metadata={'dataset': spec.dataset, 'config': spec.config, 'title': title, 'bounded_chars': 3072},
+                  )
+                  if result.get('duplicate'):
+                      duplicates += 1
+                      continue
+                  split_counts[result['split']] += 1
+                  added += 1
+                  if split_counts['train'] >= 32 and split_counts['validation'] >= 3 and split_counts['test'] >= 3:
+                      break
+                  if added >= 100:
+                      break
+              if min(split_counts.values()) == 0:
+                  raise RuntimeError(f'{key} did not produce all train/validation/test splits: {split_counts}')
+              return {'dataset': key, 'added': added, 'duplicates': duplicates, 'splits': split_counts, 'license': spec.license}
+
+          imports = [
+              import_wikipedia('wikipedia-en', 'en'),
+              import_wikipedia('wikipedia-ml', 'ml'),
+              import_dataset(store, 'dolly-15k', limit=160, status='approved'),
+          ]
+
+          tokenizer = _train_tokenizer_from_corpus(store, vocab_size=512)
+
+          pretrain_id = start_job(
+              store,
+              'pretrain',
+              epochs=1,
+              profile='tiny',
+              context=256,
+              batch_size=8,
+              gradient_accumulation=1,
+              precision='fp32',
+              checkpoint_every=100,
+          )
+          run_job(root, pretrain_id)
+
+          instruction_id = start_job(
+              store,
+              'instruction',
+              epochs=1,
+              profile='tiny',
+              context=256,
+              batch_size=8,
+              gradient_accumulation=1,
+              precision='fp32',
+              checkpoint_every=100,
+              base_model=pretrain_id,
+          )
+          run_job(root, instruction_id)
+
+          with store.db() as db:
+              pre = db.execute('SELECT status,progress FROM jobs WHERE id=?', (pretrain_id,)).fetchone()
+              inst = db.execute('SELECT status,progress FROM jobs WHERE id=?', (instruction_id,)).fetchone()
+          if pre['status'] != 'completed' or inst['status'] != 'completed':
+              raise RuntimeError(f'Training did not complete: pretrain={pre["status"]} instruction={inst["status"]}')
+
+          source_model = root / 'models' / f'{instruction_id}.pt'
+          if not source_model.exists():
+              raise RuntimeError('Final instruction checkpoint was not created')
+
+          artifact = Path('starter-artifact')
+          artifact.mkdir(exist_ok=True)
+          final_model = artifact / 'nimo-starter-open-data.pt'
+          shutil.copy2(source_model, final_model)
+          shutil.copy2(root / 'tokenizer' / 'tokenizer.json', artifact / 'tokenizer.json')
+
+          digest = hashlib.sha256(final_model.read_bytes()).hexdigest()
+          summary = {
+              'training_kind': 'starter-open-data-proof-checkpoint',
+              'datasets': imports,
+              'profile': 'tiny',
+              'context': 256,
+              'vocab_size': tokenizer['vocab_size'],
+              'pretrain_epochs': 1,
+              'instruction_epochs': 1,
+              'pretrain': {'id': pretrain_id, 'progress': json.loads(pre['progress'])},
+              'instruction': {'id': instruction_id, 'progress': json.loads(inst['progress'])},
+              'checkpoint_sha256': digest,
+              'checkpoint_bytes': final_model.stat().st_size,
+              'warning': 'Starter/proof checkpoint only. This is not a generally capable or ChatGPT-scale model.',
+          }
+          (artifact / 'training-summary.json').write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+      - name: Upload trained starter checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimo-starter-open-data-model
+          path: starter-artifact/
+          if-no-files-found: error
+          retention-days: 30
