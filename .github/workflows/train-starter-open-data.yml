@@ -1,0 +1,99 @@
+name: train-starter-open-data
+
+on:
+  push:
+    branches: ['train/starter-open-data-model']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      HF_DATASETS_DISABLE_PROGRESS_BARS: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      NIMO_MAX_DOCUMENTS: '5000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install Nimo open-data support
+        run: python -m pip install -e '.[open-data]'
+      - name: Import open datasets and train starter Nimo
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          from nimo.open_data import import_dataset, train_open_model
+          from nimo.store import Store
+          from nimo.corpus import CorpusStore
+
+          root = Path('training-data')
+          store = Store(root)
+          CorpusStore(store)
+
+          imports = []
+          imports.append(import_dataset(store, 'wikipedia-en', limit=160, status='approved'))
+          imports.append(import_dataset(store, 'wikipedia-ml', limit=160, status='approved'))
+          imports.append(import_dataset(store, 'dolly-15k', limit=320, status='approved'))
+
+          result = train_open_model(
+              root,
+              preset='quick',
+              prepare=False,
+              vocab_size=1024,
+              profile='tiny',
+              context=256,
+              pretrain_epochs=1,
+              instruction_epochs=1,
+              precision='fp32',
+          )
+
+          final_id = result['instruction']['id']
+          source_model = root / 'models' / f'{final_id}.pt'
+          if not source_model.exists():
+              raise SystemExit('Final instruction checkpoint was not created')
+
+          artifact = Path('starter-artifact')
+          artifact.mkdir(exist_ok=True)
+          final_model = artifact / 'nimo-starter-open-data.pt'
+          shutil.copy2(source_model, final_model)
+          shutil.copy2(root / 'tokenizer' / 'tokenizer.json', artifact / 'tokenizer.json')
+
+          digest = hashlib.sha256(final_model.read_bytes()).hexdigest()
+          summary = {
+              'training_kind': 'starter-open-data-proof-checkpoint',
+              'datasets': imports,
+              'profile': 'tiny',
+              'context': 256,
+              'vocab_size': 1024,
+              'pretrain_epochs': 1,
+              'instruction_epochs': 1,
+              'result': result,
+              'checkpoint_sha256': digest,
+              'checkpoint_bytes': final_model.stat().st_size,
+              'warning': 'Starter/proof checkpoint only. This is not a generally capable or ChatGPT-scale model.',
+          }
+          (artifact / 'training-summary.json').write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+      - name: Upload trained starter checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: nimo-starter-open-data-model
+          path: starter-artifact/
+          if-no-files-found: error
+          retention-days: 30
