@@ -4,4 +4,10 @@
   try { choice = localStorage.getItem('nimo-theme'); } catch { /* restricted browser storage */ }
   const theme = ['dark','light'].includes(choice) ? choice : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   document.documentElement.dataset.theme = theme;
+
+  // Load lightweight runtime UI enhancements from the same local origin.
+  const script = document.createElement('script');
+  script.src = '/static/runtime-enhancements.js';
+  script.defer = true;
+  document.head.appendChild(script);
 })();
