@@ -15,20 +15,26 @@ from .store import now, uid
 
 SENSITIVE = re.compile(
     r"(?:password|passcode|api[ _-]?key|secret|token|private key|seed phrase|otp|cvv|card number|"
+    r"bank account|account number|aadhaar|aadhar|pan number|upi pin|"
     r"\bsk-[A-Za-z0-9_-]+|\bghp_[A-Za-z0-9]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|"
     r"\+?\d[\d\s().-]{8,}\d|"
     r"diagnos|disease|medication|mental health|therapy|pregnan|sexual|orientation|"
     r"religion|muslim|christian|hindu|political|party|vote|criminal|union member|"
-    r"latitude|longitude|street address|home address)",
+    r"latitude|longitude|street address|home address|exact address|house number)",
     re.I,
 )
 
 PATTERNS = (
     ("preferred_name", re.compile(r"\b(?:my name is|call me|you can call me)\s+([A-Za-z][A-Za-z .'-]{1,60})", re.I)),
+    ("preferred_name", re.compile(r"\b(?:ente peru|ente name)\s+([A-Za-z][A-Za-z .'-]{1,60})", re.I)),
     ("preference", re.compile(r"\bI (?:prefer|like|love)\s+(.{2,160})", re.I)),
+    ("preference", re.compile(r"\b(?:enikku|enike)\s+(.{2,120}?)\s+(?:ishtam|prefer)\b", re.I)),
     ("tool", re.compile(r"\bI (?:use|usually use|work with)\s+(.{2,160})", re.I)),
+    ("tool", re.compile(r"\b(?:njan|jane)\s+(.{2,140}?)\s+(?:use cheyyunnu|use cyunnu|use akunnu|use aanu)\b", re.I)),
     ("project", re.compile(r"\b(?:my project is|I am working on|I'm working on|I am building|I'm building)\s+(.{2,180})", re.I)),
+    ("project", re.compile(r"\b(?:ente project|project name)\s*(?:is|aanu|ane|:)\s*(.{2,180})", re.I)),
     ("goal", re.compile(r"\b(?:my goal is|I want to learn|I want to build)\s+(.{2,180})", re.I)),
+    ("goal", re.compile(r"\b(?:enikku|enike)\s+(.{2,160}?)\s+(?:padikkanam|build cheyyanam|build cyanam|indakkanam)\b", re.I)),
 )
 
 
