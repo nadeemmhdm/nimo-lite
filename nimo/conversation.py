@@ -44,7 +44,7 @@ class ConversationStore:
 
     def messages(self,chat_id,limit=500):
         with self.store.db() as db:
-            rows=db.execute("SELECT * FROM chat_messages WHERE chat_id=? ORDER BY created LIMIT ?",(chat_id,min(int(limit),2000))).fetchall()
+            rows=db.execute("SELECT * FROM chat_messages WHERE chat_id=? ORDER BY rowid LIMIT ?",(chat_id,min(int(limit),2000))).fetchall()
         return [dict(r,metadata=json.loads(r["metadata"])) for r in rows]
 
     def add(self,chat_id,role,content,metadata=None):
@@ -63,16 +63,35 @@ class ConversationStore:
                     db.execute("UPDATE chats SET title=? WHERE id=?",(title,chat_id))
         return {"id":ident}
 
-    def edit_message(self,chat_id,message_id,content):
+    def edit_message(self,chat_id,message_id,content,truncate_after=False):
+        """Edit a user turn. When resending, truncate the obsolete branch after it."""
         content=str(content)
         if not content or len(content)>32768:raise ValueError("Message is empty or too large")
         with self.store.db() as db:
-            row=db.execute("SELECT role FROM chat_messages WHERE id=? AND chat_id=?",(message_id,chat_id)).fetchone()
+            row=db.execute("SELECT rowid,role FROM chat_messages WHERE id=? AND chat_id=?",(message_id,chat_id)).fetchone()
             if not row:raise ValueError("Message not found")
             if row["role"]!="user":raise ValueError("Only user messages can be edited")
             db.execute("UPDATE chat_messages SET content=? WHERE id=? AND chat_id=?",(content,message_id,chat_id))
+            if truncate_after:
+                db.execute("DELETE FROM chat_messages WHERE chat_id=? AND rowid>?",(chat_id,row["rowid"]))
             db.execute("UPDATE chats SET modified=? WHERE id=?",(now(),chat_id))
-        return {"id":message_id,"content":content}
+        return {"id":message_id,"content":content,"truncated":bool(truncate_after)}
+
+    def prepare_regenerate(self,chat_id,expected_user_text):
+        """Remove only the latest assistant answer and return the unchanged user branch."""
+        with self.store.db() as db:
+            rows=db.execute("SELECT rowid,id,role,content FROM chat_messages WHERE chat_id=? ORDER BY rowid DESC LIMIT 2",(chat_id,)).fetchall()
+            if not rows:raise ValueError("Chat has no message to regenerate")
+            latest=rows[0]
+            if latest["role"]=="assistant":
+                if len(rows)<2 or rows[1]["role"]!="user":raise ValueError("Latest answer has no user turn")
+                if str(rows[1]["content"])!=str(expected_user_text):raise ValueError("Regenerate text does not match the latest user turn")
+                db.execute("DELETE FROM chat_messages WHERE id=?",(latest["id"],))
+                db.execute("UPDATE chats SET modified=? WHERE id=?",(now(),chat_id))
+            elif latest["role"]=="user":
+                if str(latest["content"])!=str(expected_user_text):raise ValueError("Regenerate text does not match the latest user turn")
+            else:raise ValueError("Latest chat state cannot be regenerated")
+        return self.messages(chat_id)
 
     def delete_message(self,chat_id,message_id):
         with self.store.db() as db:
