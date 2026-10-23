@@ -126,8 +126,94 @@
     security.append(card);
   }
 
+  function metric(label, value, detail = '') {
+    const item = document.createElement('div');
+    item.className = 'stat';
+    const name = document.createElement('div');
+    name.className = 'stat-label';
+    name.textContent = label;
+    const number = document.createElement('div');
+    number.className = 'stat-value';
+    number.textContent = value;
+    const small = document.createElement('div');
+    small.className = 'stat-detail';
+    small.textContent = detail;
+    item.append(name, number, small);
+    return item;
+  }
+
+  function format(value, digits = 2, suffix = '') {
+    const number = Number(value);
+    return Number.isFinite(number) ? `${number.toFixed(digits)}${suffix}` : '—';
+  }
+
+  function addInferencePerformancePanel() {
+    const performance = document.getElementById('performance');
+    if (!performance || document.getElementById('nimoInferenceMetrics')) return;
+    const details = document.createElement('details');
+    details.className = 'card';
+    details.id = 'nimoInferenceMetrics';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Inference developer metrics';
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = 'Measured values from the latest local Nimo generation. Model first-token time covers model prefill/sampling only; end-to-end chat latency can also include tokenization, memory, RAG and prompt building.';
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'button-secondary';
+    refresh.append(icon('M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-2l2 2M18 15a7 7 0 0 1-12 2l-2-2'));
+    refresh.append(document.createTextNode('Refresh measured metrics'));
+    const grid = document.createElement('div');
+    grid.className = 'stats-grid';
+    const status = document.createElement('p');
+    status.className = 'muted';
+
+    const load = async () => {
+      refresh.disabled = true;
+      status.textContent = 'Reading local runtime metrics...';
+      try {
+        const data = await call('hardware-profile');
+        const m = data.runtime_metrics;
+        grid.replaceChildren();
+        if (!m) {
+          status.textContent = 'Run a response with an active NimoLM model, then refresh this panel.';
+          return;
+        }
+        const q = m.quantization_decision || {};
+        const quant = q.selected || data.quantization || '—';
+        grid.append(
+          metric('Device', String(m.device || data.accelerator?.device || '—').toUpperCase(), `${m.dtype || ''} · ${quant}`),
+          metric('Parameters', m.parameters ? `${(m.parameters / 1e6).toFixed(1)}M` : '—', `context ${m.context || '—'}`),
+          metric('Prompt tokens', String(m.prompt_tokens ?? '—'), `${m.processed_prompt_tokens ?? '—'} processed · ${m.reused_prefix_tokens ?? 0} reused`),
+          metric('Model first token', format((m.first_token_s || 0) * 1000, 1, ' ms'), 'measured; excludes retrieval/tokenization'),
+          metric('Decode speed', format(m.decode_tokens_per_s, 1, ' tok/s'), `${m.decode_tokens ?? 0} decoded tokens`),
+          metric('KV cache', format(m.kv_cache_mb, 1, ' MB'), 'preallocated per-layer cache'),
+          metric('Process RAM', format(m.process_ram_mb, 1, ' MB'), `${m.torch_threads ?? data.inference_threads ?? '—'} inference threads`),
+          metric('VRAM', m.vram_allocated_mb == null ? '—' : format(m.vram_allocated_mb, 1, ' MB'), m.vram_reserved_mb == null ? 'CPU/MPS or unavailable' : `${format(m.vram_reserved_mb, 1, ' MB')} reserved`)
+        );
+        if (q.int8_speedup) {
+          grid.append(metric('INT8 probe', `${Number(q.int8_speedup).toFixed(2)}×`, q.quality_guard?.passed ? 'speed + quality guard passed' : 'Auto retained FP32'));
+        }
+        status.textContent = 'Latest completed local generation.';
+      } catch (error) {
+        status.textContent = 'Could not read inference metrics.';
+        showNotice(error.message, true);
+      } finally {
+        refresh.disabled = false;
+      }
+    };
+
+    refresh.onclick = load;
+    details.addEventListener('toggle', () => {
+      if (details.open) load();
+    });
+    details.append(summary, note, refresh, grid, status);
+    performance.append(details);
+  }
+
   function enhance() {
     addUpdateControls();
+    addInferencePerformancePanel();
     // Accessible state labels are text, not decorative emoji. Generated assistant
     // content is intentionally left unchanged because emoji may be semantically relevant.
     document.querySelectorAll('[aria-label]').forEach(node => {
