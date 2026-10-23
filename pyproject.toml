@@ -23,6 +23,7 @@ nimo-run = "nimo.launcher:main"
 nimo-update = "nimo.updater:main"
 nimo-maintain = "nimo.maintenance:main"
 nimo-open-data = "nimo.open_data:main"
+nimo-data = "nimo.open_data:main"
 
 [tool.setuptools.package-data]
 nimo = ["static/*", "resources/*.json"]

@@ -94,7 +94,7 @@ def main():
     run([python, "-m", "pip", "install", "--upgrade", "pip"])
     # --upgrade makes repeat runs repair missing packages and update direct dependencies
     # within the version ranges declared by Nimo's pyproject.
-    run([python, "-m", "pip", "install", "--upgrade", "-e", source])
+    run([python, "-m", "pip", "install", "--upgrade", "-e", f"{source}[open-data]"])
     data.mkdir(parents=True, exist_ok=True)
     run([python, "-m", "nimo.maintenance"])
     if args.no_run:
