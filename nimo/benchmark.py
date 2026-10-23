@@ -1,7 +1,7 @@
 """Reproducible local inference benchmark for Nimo's own randomly initialized model.
 
-The benchmark intentionally downloads no model weights. It measures kernel/runtime speed,
-not language quality. Run on the same hardware before and after performance changes.
+The benchmark intentionally downloads no model weights. It measures tokenizer/runtime
+speed, not language quality. Run on the same hardware before and after performance changes.
 """
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from pathlib import Path
 import torch
 
 from .fast_inference import get_engine
-from .models import build_text_model
+from .models import build_text_model, quantize_for_inference
+from .tokenizer import train_tokenizer
 
 
 def _sync(device: str) -> None:
@@ -38,6 +39,34 @@ def _device() -> str:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _tokenizer_benchmark(repeats: int) -> dict:
+    corpus = [
+        "Nimo is a fully local generative assistant with a native tokenizer.",
+        "നിമോ ഒരു ലോക്കൽ ജനറേറ്റീവ് അസിസ്റ്റന്റാണ്.",
+        "Nimo fast ayi local reply generate cheyyunnu.",
+        "def add(a, b):\n    return a + b\n",
+    ] * 16
+    tokenizer = train_tokenizer(corpus, vocab_size=1024)
+    text = "\n".join(corpus) * 8
+    encoded = tokenizer.encode(text)
+    encode_samples = []
+    decode_samples = []
+    for _ in range(max(1, repeats)):
+        started = time.perf_counter()
+        ids = tokenizer.encode(text)
+        encode_samples.append(time.perf_counter() - started)
+        started = time.perf_counter()
+        tokenizer.decode(ids)
+        decode_samples.append(time.perf_counter() - started)
+    return {
+        "vocab_size": tokenizer.vocab_size,
+        "input_characters": len(text),
+        "encoded_tokens": len(encoded),
+        "encode_tokens_per_s": len(encoded) / max(statistics.median(encode_samples), 1e-9),
+        "decode_tokens_per_s": len(encoded) / max(statistics.median(decode_samples), 1e-9),
+    }
 
 
 def _uncached(model, prompt, steps: int, device: str) -> dict:
@@ -89,7 +118,15 @@ def _cached(model, prompt, steps: int, device: str) -> dict:
     }
 
 
-def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats=2, threads=None) -> dict:
+def run(
+    profile="small",
+    context=1024,
+    prompt_tokens=128,
+    new_tokens=24,
+    repeats=2,
+    threads=None,
+    quantization="none",
+) -> dict:
     device = _device()
     if threads and device == "cpu":
         os.environ["NIMO_INFERENCE_THREADS"] = str(max(1, int(threads)))
@@ -97,13 +134,15 @@ def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats
     torch.manual_seed(7)
     load_start = time.perf_counter()
     model = build_text_model(profile=profile, context=context, vocab_size=8000).to(device).eval()
+    selected_quantization = "fp32" if quantization == "none" else quantization
+    if quantization != "none":
+        model, selected_quantization = quantize_for_inference(model, quantization, device)
     engine = get_engine(model)
     _sync(device)
     load_s = time.perf_counter() - load_start
     prompt = torch.randint(
         8, 7999, (1, min(prompt_tokens, context - new_tokens - 1)), device=device
     )
-    # Warm only tiny kernels/caches; no visible text is generated.
     with torch.inference_mode():
         engine.reset()
         engine.prefill(prompt[0, : min(8, prompt.shape[1])].tolist())
@@ -115,8 +154,8 @@ def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats
         return statistics.median(float(item[key]) for item in rows)
 
     result = {
-        "schema": 2,
-        "note": "Runtime/kernel benchmark with Nimo random weights; not a language-quality benchmark.",
+        "schema": 3,
+        "note": "Runtime/tokenizer benchmark with Nimo random weights; not a language-quality benchmark.",
         "hardware": {
             "platform": platform.platform(),
             "python": platform.python_version(),
@@ -131,6 +170,9 @@ def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats
             "parameters": model.parameter_count(),
             "context": context,
             "vocab_size": 8000,
+            "requested_quantization": quantization,
+            "selected_quantization": selected_quantization,
+            "quantization_decision": getattr(model, "_nimo_quantization_decision", None),
         },
         "workload": {
             "prompt_tokens": int(prompt.shape[1]),
@@ -138,6 +180,7 @@ def run(profile="small", context=1024, prompt_tokens=128, new_tokens=24, repeats
             "repeats": repeats,
         },
         "model_load_s": load_s,
+        "tokenizer": _tokenizer_benchmark(repeats),
         "cached": {key: median(key, cached) for key in cached[0]},
         "uncached": {key: median(key, uncached) for key in uncached[0]},
         "peak_rss_mb": _rss_mb(),
@@ -154,6 +197,11 @@ def main() -> None:
     parser.add_argument("--new-tokens", type=int, default=24)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--threads", type=int)
+    parser.add_argument(
+        "--quantization",
+        default="none",
+        choices=("none", "auto", "fp32", "bf16", "fp16", "int8"),
+    )
     parser.add_argument("--output", default="benchmark-results.json")
     args = parser.parse_args()
     result = run(
@@ -163,6 +211,7 @@ def main() -> None:
         args.new_tokens,
         args.repeats,
         args.threads,
+        args.quantization,
     )
     text = json.dumps(result, indent=2, sort_keys=True)
     Path(args.output).write_text(text + "\n", encoding="utf-8")
