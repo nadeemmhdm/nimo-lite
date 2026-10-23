@@ -18,7 +18,7 @@ import httpx
 
 MAX_WEB_BYTES = 1_500_000
 MAX_TEXT_CHARS = 60_000
-USER_AGENT = "NimoLite/0.3 (+local controlled research client)"
+USER_AGENT = "NimoLite/0.2.0 (+local controlled research client)"
 
 
 def _public_host(url: str) -> str:
@@ -29,7 +29,10 @@ def _public_host(url: str) -> str:
         raise ValueError("URLs with credentials are blocked")
     if not parts.hostname:
         raise ValueError("URL host is missing")
-    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("Invalid web URL port") from exc
     if port not in (80, 443):
         raise ValueError("Only standard web ports are allowed")
     host = parts.hostname.rstrip(".")
@@ -51,34 +54,37 @@ def _public_host(url: str) -> str:
 
 def _safe_get(url: str, max_redirects: int = 3) -> tuple[httpx.Response, str]:
     current = url
-    with httpx.Client(
-        timeout=httpx.Timeout(10.0, connect=5.0),
-        follow_redirects=False,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html,text/plain,application/pdf;q=0.9,*/*;q=0.2"},
-    ) as client:
-        for _ in range(max_redirects + 1):
-            _public_host(current)
-            with client.stream("GET", current) as response:
-                if response.status_code in (301, 302, 303, 307, 308):
-                    location = response.headers.get("location")
-                    if not location:
-                        raise ValueError("Web redirect missing destination")
-                    current = urljoin(current, location)
-                    continue
-                response.raise_for_status()
-                data = bytearray()
-                for chunk in response.iter_bytes():
-                    data.extend(chunk)
-                    if len(data) > MAX_WEB_BYTES:
-                        raise ValueError("Web page exceeds the 1.5 MB safety limit")
-                clone = httpx.Response(
-                    status_code=response.status_code,
-                    headers=response.headers,
-                    content=bytes(data),
-                    request=response.request,
-                )
-                return clone, current
-        raise ValueError("Too many web redirects")
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,text/plain,application/pdf;q=0.9,*/*;q=0.2"},
+        ) as client:
+            for _ in range(max_redirects + 1):
+                _public_host(current)
+                with client.stream("GET", current) as response:
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ValueError("Web redirect missing destination")
+                        current = urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    data = bytearray()
+                    for chunk in response.iter_bytes():
+                        data.extend(chunk)
+                        if len(data) > MAX_WEB_BYTES:
+                            raise ValueError("Web page exceeds the 1.5 MB safety limit")
+                    clone = httpx.Response(
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        content=bytes(data),
+                        request=response.request,
+                    )
+                    return clone, current
+            raise ValueError("Too many web redirects")
+    except httpx.HTTPError as exc:
+        raise ValueError("Web request failed") from exc
 
 
 class _VisibleText(HTMLParser):
@@ -194,12 +200,18 @@ def read_page(url: str) -> dict:
             from pypdf import PdfReader
         except ImportError as exc:
             raise ValueError("PDF reading requires the pypdf dependency") from exc
-        reader = PdfReader(io.BytesIO(response.content))
-        pieces = []
-        for page in reader.pages[:25]:
-            pieces.append(page.extract_text() or "")
-            if sum(len(x) for x in pieces) >= MAX_TEXT_CHARS:
-                break
+        try:
+            reader = PdfReader(io.BytesIO(response.content))
+            pieces = []
+            total = 0
+            for page in reader.pages[:25]:
+                text = page.extract_text() or ""
+                pieces.append(text)
+                total += len(text)
+                if total >= MAX_TEXT_CHARS:
+                    break
+        except Exception as exc:
+            raise ValueError("Could not read PDF text") from exc
         text = _clean_text("\n\n".join(pieces))
         title = (reader.metadata.title if reader.metadata else None) or urlsplit(final_url).path.rsplit("/", 1)[-1]
         return {
@@ -238,15 +250,18 @@ def search_web(query: str, limit: int = 5) -> list[dict]:
     if not query:
         raise ValueError("Search query is empty")
     limit = max(1, min(int(limit), 8))
-    with httpx.Client(
-        timeout=httpx.Timeout(10.0, connect=5.0),
-        follow_redirects=False,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
-    ) as client:
-        response = client.get("https://html.duckduckgo.com/html/", params={"q": query})
-        response.raise_for_status()
-        if len(response.content) > MAX_WEB_BYTES:
-            raise ValueError("Search response exceeds safety limit")
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            follow_redirects=False,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+        ) as client:
+            response = client.get("https://html.duckduckgo.com/html/", params={"q": query})
+            response.raise_for_status()
+            if len(response.content) > MAX_WEB_BYTES:
+                raise ValueError("Search response exceeds safety limit")
+    except httpx.HTTPError as exc:
+        raise ValueError("Search provider unavailable") from exc
     parser = _DDGParser()
     parser.feed(response.text)
     parser.close()
