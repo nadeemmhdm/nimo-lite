@@ -45,6 +45,26 @@ def client(tmp_path):
         c.headers['X-Nimo-Token']=c.get('/api/bootstrap').json()['token']
         yield c
 
+def test_starter_resource_is_read_as_utf8(client, monkeypatch):
+    from pathlib import Path
+
+    original_read_text = Path.read_text
+
+    def require_utf8(path, *args, **kwargs):
+        if path.name == "assistant-basics.json":
+            assert kwargs.get("encoding") == "utf-8"
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", require_utf8)
+    info = client.get("/api/starter")
+    assert info.status_code == 200
+    assert info.json()["examples"] > 0
+
+    loaded = client.post("/api/starter", json={})
+    assert loaded.status_code == 200
+    assert loaded.json()["added"] > 0
+
+
 
 def test_tokenizer_unicode():
     t=ByteTokenizer()
