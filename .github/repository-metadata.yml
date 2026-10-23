@@ -1,0 +1,17 @@
+description: Original fully local generative AI stack with a trainable tokenizer, decoder Transformer, memory, RAG, pretraining and instruction tuning.
+topics:
+  - local-ai
+  - generative-ai
+  - transformer
+  - pytorch
+  - language-model
+  - llm-from-scratch
+  - tokenizer
+  - rag
+  - offline-ai
+  - malayalam
+  - manglish
+  - machine-learning
+  - privacy
+  - open-source-ai
+homepage: https://github.com/nadeemmhdm/nimo-lite
