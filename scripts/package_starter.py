@@ -6,9 +6,17 @@ from pathlib import Path
 from nimo.store import Store
 
 
+SOURCES = [
+    Path('nimo/resources/assistant-basics.json'),
+    Path('nimo/resources/general-basics.json'),
+    Path('nimo/resources/world-history-basics.json'),
+]
+
+
 def package(root,report):
     root=Path(root)
-    source=Path('nimo/resources/assistant-basics.json')
+    source_bytes={path.name:path.read_bytes() for path in SOURCES}
+    combined_hash=hashlib.sha256(b'\0'.join(source_bytes[name] for name in sorted(source_bytes))).hexdigest()
     # Public evaluation samples remain separate from a recipient's training approval workflow.
     public_rows=Store(root).samples('text')
     evaluation=json.dumps(dict(samples=public_rows),ensure_ascii=False).encode()
@@ -19,7 +27,8 @@ def package(root,report):
         if hashlib.sha256(raw).hexdigest()!=row['sha256']:raise ValueError('Trained checkpoint changed')
         entries.append(dict(task=row['task'],file=f"nimo-{row['task']}.pt",sha256=row['sha256'],metrics=row['metrics']))
     manifest=dict(format='nimo-model-bundle-v1',version='0.2.0',models=entries,
-        dataset_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        dataset_sha256=combined_hash,
+        dataset_files={name:hashlib.sha256(raw).hexdigest() for name,raw in source_bytes.items()},
         evaluation_sha256=hashlib.sha256(evaluation).hexdigest())
     out=Path('artifacts/nimo-lite-starter-v0.2.0.zip')
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
@@ -28,7 +37,7 @@ def package(root,report):
             row=next(r for r in report['models'] if r['task']==entry['task']);z.write(root/row['path'],entry['file'])
         z.writestr('evaluation.json',evaluation)
         z.writestr('MODEL_CARD.md',Path('docs/STARTER_MODEL_CARD.md').read_text())
-        z.writestr('assistant-basics.json',source.read_bytes())
+        for name,raw in source_bytes.items():z.writestr(name,raw)
         z.writestr('LICENSE.txt','Original authored starter examples and these experimental weights: CC0-1.0. Code: MIT. No capability warranty.\n')
     print(f'Bundle: {out}; accepted tasks: {[e["task"] for e in entries]}',flush=True)
     return out
