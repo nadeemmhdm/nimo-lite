@@ -7,7 +7,9 @@
       try {
         const body = JSON.parse(init.body);
         const selector = document.getElementById('reasoningLevel');
+        const memoryToggle = document.getElementById('autoMemoryToggle');
         if (selector && !body.reasoning) body.reasoning = selector.value;
+        if (memoryToggle && body.auto_memory === undefined) body.auto_memory = memoryToggle.checked;
         init = {...init, body: JSON.stringify(body)};
       } catch { /* Leave non-JSON requests unchanged. */ }
     }
@@ -36,12 +38,32 @@
       label.insertAdjacentElement('afterend', select);
     }
 
+    if (chatMode && !document.getElementById('autoMemoryToggle')) {
+      const memoryLabel = document.createElement('label');
+      memoryLabel.className = 'check-label';
+      memoryLabel.title = 'Automatically remember low-risk preferences and project details in local SQLite';
+      const memoryToggle = document.createElement('input');
+      memoryToggle.id = 'autoMemoryToggle';
+      memoryToggle.type = 'checkbox';
+      memoryToggle.checked = true;
+      try {
+        const saved = localStorage.getItem('nimo-auto-memory');
+        if (saved === 'off') memoryToggle.checked = false;
+      } catch { /* localStorage may be unavailable */ }
+      memoryToggle.addEventListener('change', () => {
+        try { localStorage.setItem('nimo-auto-memory', memoryToggle.checked ? 'on' : 'off'); } catch { /* ignore */ }
+      });
+      memoryLabel.append(memoryToggle, document.createTextNode(' Memory'));
+      const reasoning = document.getElementById('reasoningLevel');
+      (reasoning || chatMode).insertAdjacentElement('afterend', memoryLabel);
+    }
+
     const updateHelp = () => {
       const modeHelp = document.getElementById('chatModeHelp');
       if (!modeHelp) return;
       const mode = chatMode ? chatMode.value : 'assistant';
       const messages = {
-        assistant: 'Generative local chat uses cached inference, local memory, and controlled web sources when online mode is enabled.',
+        assistant: 'Generative local chat uses cached inference, optional local memory, and controlled web sources when online mode is enabled.',
         knowledge: 'Returns matching local notes only. Model weights are not changed.',
         model: 'Uses the active local text model directly. Output quality depends on its training data and evaluation.'
       };
