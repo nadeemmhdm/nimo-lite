@@ -37,7 +37,7 @@ User
 
 ## One-command install and run
 
-Python 3.10+ is required. The bootstrap checks out the official repository (using Git when available, otherwise a bounded GitHub ZIP), creates an isolated virtual environment, installs requirements, and launches Nimo on `127.0.0.1`.
+Regular CPython 3.10+ is required; free-threaded builds such as Python 3.13t are not currently supported by the native dependency wheels. The bootstrap checks out the official repository (using Git when available, otherwise a bounded GitHub ZIP), creates an isolated virtual environment, installs requirements, and launches Nimo on `127.0.0.1`.
 
 **Linux/macOS**
 ```bash
@@ -48,6 +48,8 @@ python3 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.gith
 ```powershell
 py -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/nadeemmhdm/nimo-lite/main/bootstrap.py').read())"
 ```
+
+On Windows, bootstrap automatically switches to an installed regular CPython interpreter if it detects a free-threaded build. If no regular interpreter is installed, install standard CPython 3.12 (not the free-threaded build) and run `py -3.12` with the command above.
 
 Default install data lives under `~/.nimo-lite`. Set `NIMO_HOME` to use another location.
 

@@ -12,7 +12,13 @@ Windows PowerShell:
 py -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/nadeemmhdm/nimo-lite/main/bootstrap.py').read())"
 ```
 
-The bootstrap uses Git if available, otherwise downloads a bounded official GitHub ZIP; creates `~/.nimo-lite/venv`; installs the package and dependencies; creates `~/.nimo-lite/data`; and starts the loopback server.
+If no regular CPython interpreter is installed and bootstrap reports that the current Python is free-threaded, install standard CPython 3.12 from [python.org](https://www.python.org/downloads/windows/) (do not choose the experimental free-threaded build), then run:
+
+```powershell
+py -3.12 -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/nadeemmhdm/nimo-lite/main/bootstrap.py').read())"
+```
+
+The bootstrap uses Git if available, otherwise downloads a bounded official GitHub ZIP; creates `~/.nimo-lite/venv`; installs the package and dependencies; creates `~/.nimo-lite/data`; and starts the loopback server. Use **regular CPython 3.10+**, not a free-threaded (`3.13t`) build: current NumPy/Pillow/PyTorch native wheels do not support every free-threaded Windows configuration. Bootstrap automatically switches to an installed regular interpreter and rebuilds an incompatible existing virtual environment. It requires binary wheels for native dependencies rather than attempting local C/C++ compilation.
 
 Override the installation root with `NIMO_HOME`.
 
