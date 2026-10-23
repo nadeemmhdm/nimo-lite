@@ -1,26 +1,41 @@
-# Roadmap and known limitations
+# Roadmap
 
-## Current foundation
+Nimo Lite's direction is an honest, original, locally trainable small-language-model stack.
 
-The first version trains tiny text and image-classification models locally. The default chat mode offers basic trained intent routing to allowlisted authored responses and retrieves saved notes with sources. Original language generation remains a separate experimental choice. It does not synthesize verified answers. Images can be manually annotated with multiple labels and boxes; only single-label classification has a training architecture.
+## Implemented foundation
 
-## Next priorities
+- native multilingual byte-subword tokenizer training
+- decoder-only NimoLM v2 with RMSNorm, RoPE, SwiGLU and KV cache
+- Tiny/Small/Medium model profiles
+- separate base pretraining and instruction tuning
+- assistant-only SFT loss masking
+- persistent multi-turn chats and token-budgeted context
+- inspectable local memory
+- BM25 local RAG
+- streamed sampling with generation presets
+- CPU/CUDA/MPS training targets and mixed-precision hooks
+- local checkpoint/resume state and tokenizer/data hashes
+- scalable corpus imports with exact/near deduplication
+- optional controlled web evidence
+- release updater/bootstrap tooling
 
-- Dedicated immutable evaluation datasets and persistent split assignment across dataset growth.
-- Larger independent intent tests, calibrated rejection, and stronger out-of-scope detection.
-- Better multilingual sequence construction, held-out instruction benchmarks, and longer context within measured memory budgets.
-- OCR architecture, detector training, captioning, and visual question answering, each independently evaluated.
-- Validation of code examples inside an OS-enforced sandbox; currently code is stored and trained as text only.
-- Multi-source search and explicit document approval with more complete provenance.
-- Stronger source authentication for distributed model bundles.
-- Better poisoning review, near-duplicate methods, conflict resolution, and optional malware scanning.
-- Hard OS resource quotas, per-worker restricted credentials, export streaming, encrypted backup, and data retention controls.
-- Calibrated classifier confidence, independent external tests, and task-specific regression gates.
-- Real-device Windows/macOS/CUDA/Metal and minimum-6-GB benchmarks.
-- Native video decode limits, frame-group split protection by source clip, audio transcription, and temporal models.
+## Next engineering priorities
 
-## Explicitly not demonstrated
+1. Improve tokenizer training speed/quality on multi-GB corpora (incremental BPE/unigram experiments).
+2. Add packed-sequence training to reduce padding waste.
+3. Add gradient checkpointing and memory-efficient attention paths for longer context.
+4. Add stronger multilingual/coding/math held-out benchmark suites.
+5. Add Nimo-trained embedding/retrieval model as an optional replacement for lexical-only RAG.
+6. Add safe INT4 inference for Nimo checkpoints after correctness/performance validation.
+7. Add model export format with publisher signatures/authentication.
+8. Add extractive/local learned conversation summarization quality gates.
+9. Add richer dataset quality dashboards and contamination reports.
+10. Benchmark Windows, macOS/MPS, Linux CPU and multiple CUDA tiers.
 
-General reasoning, reliable mathematics or coding, Malayalam/Manglish conversational ability, object detection, OCR, screenshot understanding, visual question answering, video understanding, speech transcription, ChatGPT-equivalent quality, and universal jailbreak resistance. No corpus large enough to establish those capabilities is supplied. A UTF-8 tokenizer supports storing language examples but does not confer language proficiency.
+## Non-goals
 
-The application is a small-data local prototype. It is not designed for millions of examples, adversarial multiuser hosting, or certified handling of regulated data. There is no llama.cpp/GGUF integration; the interface is inspired by compact local chat tools while the models run in PyTorch.
+- hiding third-party pretrained LLM weights behind a Nimo name
+- claiming frontier-model capability from small internal tests
+- automatic shell/computer control from generated text
+- telemetry or hidden cloud inference
+- silently training on user conversations, memory, or retrieved web pages
