@@ -8,7 +8,7 @@ Nimo measures performance instead of displaying hard-coded speed claims. The ben
 python -m nimo.benchmark --profile small --context 1024 --prompt-tokens 128 --new-tokens 24 --repeats 2 --output benchmark-results.json
 ```
 
-Use the same machine, model profile, context, precision, prompt size, output length and thread configuration when comparing changes. The JSON result records platform, PyTorch version, model parameters, load time, prompt size, first-token latency, prefill throughput, decode throughput and peak resident memory.
+Use the same machine, model profile, context, precision, prompt size, output length and thread configuration when comparing changes. Add `--quantization auto` to measure the locally selected inference representation. The JSON result records platform, PyTorch version, model parameters, load time, prompt size, tokenizer throughput, first-token latency, prefill throughput, decode throughput, incremental-prefix reuse, current/peak resident memory and the quantization decision.
 
 ## Recorded baseline before the inference rewrite
 
@@ -32,6 +32,32 @@ The baseline was captured in GitHub Actions before performance-critical inferenc
 - Peak RSS: 417.68 MiB
 
 These figures describe that CI runner only. Nimo must not present them as expected speed on another computer.
+
+## Measured result after optimization
+
+The optimized implementation was measured again on the same GitHub Actions workload and hardware class. Small run-to-run variation is expected on shared CI infrastructure, so these values are evidence for this run rather than a universal speed promise.
+
+| Metric | Baseline | Optimized FP32 | Optimized Auto |
+| --- | ---: | ---: | ---: |
+| Model first-token stage | 74.37 ms | 62.07 ms | 26.09 ms |
+| Prompt prefill | 1,721.94 tok/s | 2,062.40 tok/s | 4,924.93 tok/s |
+| Cached decode | 75.11 tok/s | 75.38 tok/s | 199.89 tok/s |
+| Uncached full-sequence decode | 13.46 tok/s | 15.16 tok/s | 38.54 tok/s |
+| Model load / representation selection | 0.342 s | 0.357 s | 0.670 s |
+| KV cache | previous growing tuples | 36.0 MiB preallocated | 36.0 MiB preallocated |
+| Peak process RSS | 417.68 MiB | 427.75 MiB | 549.05 MiB |
+| Steady RSS immediately after final model load | not recorded in baseline | 360.54 MiB | 330.79 MiB |
+| Steady RSS after benchmark workload | not recorded in baseline | 428.04 MiB | 370.11 MiB |
+
+On this run, FP32 reduced the measured model first-token stage by about 16.5% and improved prefill by about 19.8%; decode throughput was essentially unchanged because the previous implementation already had a functional tuple KV cache. The important FP32 change is that decode now writes into fixed K/V storage instead of repeatedly growing K/V tensors, which bounds cache allocation behavior and enables safe prefix reuse across turns.
+
+CPU Auto selected INT8 only after its local speed and quality probe passed. Relative to the pre-change baseline on this run, Auto reduced the measured model first-token stage by about 64.9%, increased prefill throughput by about 186.0%, and increased cached decode throughput by about 166.1%. The probe measured a 2.76x kernel speedup, preserved the same next-token decision, and measured normalized logit MAE of about 0.0546, below the configured 0.08 guard.
+
+Auto has a deliberate one-time startup tradeoff: while evaluating FP32 versus INT8 it temporarily holds both representations, so peak RSS and model-selection time are higher. After the rejected representation is released and the allocator is trimmed where supported, this run measured 330.79 MiB steady RSS after load, about 8.3% below the optimized FP32 run. Peak RSS is reported rather than hidden.
+
+The incremental prompt benchmark also proved that an unchanged 128-token prefix was reused and only the appended 8-token suffix was processed. On this run the suffix processed at about 467.54 tok/s in FP32 and 1,139.09 tok/s in Auto/INT8. This optimization applies only when the prompt prefix is byte-for-byte/token-for-token compatible; edits, changed memory/RAG context and new chats safely invalidate or truncate the cached prefix.
+
+The tokenizer microbenchmark in the same run measured roughly 794k encode tokens/s and 7.02M decode tokens/s in the FP32 process. These numbers are included to expose tokenizer cost, not as a cross-machine guarantee.
 
 ## Optimized inference design
 
@@ -72,11 +98,17 @@ The probe is a safety/performance guard, not a substitute for full task-quality 
 
 A tiny invisible warmup is performed after the final inference representation is selected. It can be disabled with `NIMO_WARMUP=0`. CUDA uses the compatible PyTorch SDPA backend and FP16/BF16 choices exposed by the runtime. Apple MPS uses supported PyTorch operations and falls back safely when acceleration is unavailable. Core inference remains fully local.
 
+`torch.compile` is intentionally not enabled automatically. Compilation can increase startup latency for small local models and the current optimized path has not demonstrated a repeatable measured benefit from enabling it. It should only become an automatic choice after a same-hardware benchmark proves a net benefit for the relevant backend and workload.
+
 ## Context and generation
 
 Long prompts increase prefill latency and K/V memory. Nimo's existing Fast/Balanced/Deep reasoning modes bound output and evidence budgets, while the prompt builder preserves the system instruction and current user message under context pressure. Use Fast for latency-sensitive chat, Balanced for normal use, and a larger-context model/profile only when the extra context is needed.
 
 Generation stops on EOS/PAD, configured stop sequences, the output token limit, or client cancellation. The streaming generator yields between decode steps so the UI Stop action can cancel promptly.
+
+## Developer performance panel
+
+The existing Performance Monitor contains an optional collapsed inference developer panel. It shows measured values from the latest completed local generation rather than synthetic indicators: active device, dtype/quantization, parameter count, context, prompt/processed/reused tokens, model first-token latency, decode tokens/s, K/V cache memory, process RAM, inference threads, VRAM where available and the Auto quantization decision. Normal chat remains uncluttered.
 
 ## Correctness regressions
 
@@ -89,10 +121,12 @@ Performance changes are covered by tests for:
 - stable preallocated K/V storage across decode steps;
 - tokenizer artifact reuse;
 - separate model cache sessions;
+- no model reload between repeated requests for the same active model;
+- model reload after an explicit model-cache clear/switch boundary;
 - new-chat cache reset;
 - indexed RAG and memory retrieval;
 - explicit and Auto quantization loading.
 
 ## Interpreting results
 
-First-token latency and decode throughput are separate. A fast decoder can still feel slow if tokenization, retrieval or prompt prefill dominates. Benchmark the complete local application on the target hardware and use measured values rather than transferring CI numbers to another machine.
+First-token latency and decode throughput are separate. A fast decoder can still feel slow if tokenization, retrieval or prompt prefill dominates. The developer panel labels its first-token metric as model-stage latency for that reason. Benchmark the complete local application on the target hardware and use measured values rather than transferring CI numbers to another machine.
