@@ -14,6 +14,7 @@ from nimo.web_access import _public_host
 
 
 GENERAL = Path(__file__).parents[1] / 'nimo/resources/general-basics.json'
+WORLD = Path(__file__).parents[1] / 'nimo/resources/world-history-basics.json'
 
 
 def test_v2_model_uses_cached_incremental_decode_shape():
@@ -64,6 +65,12 @@ def test_general_training_corpus_covers_requested_basics():
     assert all(row['source'].startswith('Nimo Lite contributors: original') for row in rows)
     assert all(row['license'] == 'CC0-1.0' for row in rows)
 
+    world = json.loads(WORLD.read_text())
+    world_questions = {row['question'].casefold() for row in world}
+    assert 'who was mahatma gandhi?' in world_questions
+    assert 'what is latitude?' in world_questions
+    assert all(row['category'] == 'qa:world' for row in world)
+
 
 def test_general_corpus_can_train_v2_text_model(tmp_path):
     store = Store(tmp_path)
@@ -81,10 +88,13 @@ def test_general_corpus_can_train_v2_text_model(tmp_path):
 def test_local_memory_is_useful_and_filters_sensitive_data(tmp_path):
     memory = LocalMemory(Store(tmp_path))
     assert extract_memories('I prefer concise technical answers')
+    assert extract_memories('ente project aanu Nimo Lite')[0]['kind'] == 'project'
+    assert extract_memories('jane VS Code use akunnu')[0] == {'kind':'tool', 'value':'VS Code'}
     saved = memory.remember_from_message('I prefer concise technical answers')
     assert saved and memory.list()[0]['kind'] == 'preference'
     before = len(memory.list())
     assert memory.remember_from_message('my password is correct-horse-battery-staple') == []
+    assert memory.remember_from_message('my Aadhaar number is 1234 5678 9012') == []
     assert memory.remember_from_message('I was diagnosed with a medical condition') == []
     assert len(memory.list()) == before
     assert memory.clear() == before
