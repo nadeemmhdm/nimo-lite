@@ -66,6 +66,25 @@ def test_starter_resource_is_read_as_utf8(client, monkeypatch):
 
 
 
+def test_dashboard_assets_are_cache_busted_and_missing_text_targets_are_guarded():
+    from pathlib import Path
+
+    static = Path(__file__).parents[1] / "nimo" / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    theme_js = (static / "theme.js").read_text(encoding="utf-8")
+    version = "20261023-domfix1"
+
+    for asset in ("theme.js", "style.css", "app.js"):
+        assert f"/static/{asset}?v={version}" in html
+    assert f"/static/runtime-enhancements.js?v={version}" in theme_js
+    assert f"/static/runtime-fixes.js?v={version}" in theme_js
+    assert "function setText(id, value)" in app_js
+    assert "dashboard markup is missing #notice" in app_js
+    for ident in ("notice", "starterCount", "resources", "hardware", "jobBadge", "jobTitle", "jobSummary", "job", "pageInfo", "imageCount"):
+        assert f'id="{ident}"' in html
+
+
 def test_tokenizer_unicode():
     t=ByteTokenizer()
     for text in ('Hello','നമസ്കാരം','sukham ano?','2+2=4','def add(a,b): return a+b'):
