@@ -136,6 +136,39 @@ def _estimated_weight_mb(profile, bytes_per_parameter):
     return round(parameters * bytes_per_parameter / 2**20, 1)
 
 
+def _latest_inference_metrics():
+    """Best-effort developer metrics from the most recently created active engine."""
+    try:
+        from . import fast_inference
+
+        engines = list(fast_inference._ENGINES.values())
+        for engine in reversed(engines):
+            if not engine.last_metrics:
+                continue
+            metrics = dict(engine.last_metrics)
+            model = engine.model
+            metrics.update(
+                {
+                    "parameters": model.parameter_count() if hasattr(model, "parameter_count") else None,
+                    "context": getattr(model, "context", None),
+                    "dtype": str(getattr(getattr(model, "token", None), "weight", None).dtype).replace("torch.", "")
+                    if getattr(getattr(model, "token", None), "weight", None) is not None
+                    else None,
+                    "quantization_decision": getattr(model, "_nimo_quantization_decision", None),
+                    "process_ram_mb": round(psutil.Process().memory_info().rss / 2**20, 1),
+                }
+            )
+            if engine.device == "cuda":
+                import torch
+
+                metrics["vram_allocated_mb"] = round(torch.cuda.memory_allocated() / 2**20, 1)
+                metrics["vram_reserved_mb"] = round(torch.cuda.memory_reserved() / 2**20, 1)
+            return metrics
+    except Exception:
+        pass
+    return None
+
+
 def recommended_profile(root="."):
     hw = hardware(root)
     acc = accelerator()
@@ -165,4 +198,5 @@ def recommended_profile(root="."):
         "quantization": quantization,
         "estimated_weights": estimated,
         "accelerator": acc,
+        "runtime_metrics": _latest_inference_metrics(),
     }
