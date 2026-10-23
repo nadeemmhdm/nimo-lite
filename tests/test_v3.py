@@ -6,9 +6,10 @@ import torch
 from fastapi.testclient import TestClient
 
 from nimo.memory import LocalMemory, extract_memories
-from nimo.models import MODEL_PROFILES, build_text_model
+from nimo.models import MODEL_PROFILES, build_text_model, load_model
 from nimo.runtime import REASONING, _safe_calculate, create_app
 from nimo.store import Store
+from nimo.training import run_job, start_job
 from nimo.web_access import _public_host
 
 
@@ -62,6 +63,19 @@ def test_general_training_corpus_covers_requested_basics():
     assert 'good morning' in questions and len(rows) >= 70
     assert all(row['source'].startswith('Nimo Lite contributors: original') for row in rows)
     assert all(row['license'] == 'CC0-1.0' for row in rows)
+
+
+def test_general_corpus_can_train_v2_text_model(tmp_path):
+    store = Store(tmp_path)
+    for item in json.loads(GENERAL.read_text())[:18]:
+        row = store.add_text(**item)
+        store.update(row['id'], {'status':'approved'})
+    ident = start_job(store, 'text', epochs=1, context=128, profile='micro')
+    run_job(tmp_path, ident)
+    model, checkpoint = load_model(tmp_path/'models'/f'{ident}.pt')
+    assert checkpoint['task'] == 'text' and checkpoint['epoch'] == 1
+    assert checkpoint['architecture']['version'] == 2
+    assert model.head.weight is model.token.weight
 
 
 def test_local_memory_is_useful_and_filters_sensitive_data(tmp_path):
