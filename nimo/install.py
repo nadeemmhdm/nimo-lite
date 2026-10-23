@@ -9,16 +9,16 @@ from pathlib import Path
 from .models import load_model
 from .store import Store,uid,now
 
-MAX_BUNDLE=30*1024*1024
+MAX_BUNDLE=128*1024*1024
 
 
 def install(bundle,root):
     bundle=Path(bundle)
-    if bundle.stat().st_size>MAX_BUNDLE: raise ValueError('Model bundle exceeds 30 MiB')
+    if bundle.stat().st_size>MAX_BUNDLE: raise ValueError('Model bundle exceeds 128 MiB')
     store=Store(root)
     validated=[]
     with zipfile.ZipFile(bundle) as z,tempfile.TemporaryDirectory() as tmp:
-        if sum(i.file_size for i in z.infolist())>MAX_BUNDLE: raise ValueError('Expanded bundle exceeds 30 MiB')
+        if sum(i.file_size for i in z.infolist())>MAX_BUNDLE: raise ValueError('Expanded bundle exceeds 128 MiB')
         if len(z.namelist())!=len(set(z.namelist())): raise ValueError('Duplicate archive members')
         manifest=json.loads(z.read('manifest.json'))
         if manifest.get('format')!='nimo-model-bundle-v1' or not 1<=len(manifest.get('models',[]))<=3:
@@ -60,7 +60,7 @@ def install(bundle,root):
                 shutil.copyfile(path,store.root/relative)
                 (store.root/'models'/f'{ident}.eval.json').write_bytes(evaluation)
                 metrics=dict(entry['metrics'],bundled_evaluation_sha256=hashlib.sha256(evaluation).hexdigest(),
-                             provenance='Original public assistant-basics-v1; no personal data')
+                             provenance='Original bundled Nimo Lite public fixtures; no personal data')
                 db.execute('UPDATE models SET active=0 WHERE task=?',(entry['task'],))
                 db.execute('INSERT INTO models VALUES(?,?,?,?,?,?)',(ident,entry['task'],relative,json.dumps(metrics),1,now()))
                 store.event(db,'install_model',detail=entry['task']+': '+entry['sha256'])
