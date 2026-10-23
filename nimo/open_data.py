@@ -32,8 +32,8 @@ def default_data_root() -> Path:
         return Path(explicit).expanduser()
     home = os.environ.get("NIMO_HOME")
     if home:
-        return Path(home).expanduser()
-    return Path.home() / ".nimo-lite"
+        return Path(home).expanduser() / "data"
+    return Path.home() / ".nimo-lite" / "data"
 
 
 def dataset_cache(root: str | Path) -> Path:
@@ -333,7 +333,7 @@ def _print(value):
 
 
 def _add_download_args(parser):
-    parser.add_argument("--data", default=None, help="Local Nimo data root; defaults to NIMO_DATA/NIMO_HOME/~/.nimo-lite")
+    parser.add_argument("--data", default=None, help="Local Nimo data root; defaults to NIMO_DATA/NIMO_HOME/data/~/.nimo-lite/data")
     parser.add_argument("--preset", choices=PRESETS, default="quick")
     parser.add_argument("--types", default="all", help="all or comma-separated: general,malayalam,code,math")
     parser.add_argument("--include-fineweb", action="store_true")

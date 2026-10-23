@@ -33,7 +33,7 @@ def test_four_selectable_types_cover_default_bundle():
 def test_default_data_root_is_user_local(monkeypatch, tmp_path):
     monkeypatch.delenv("NIMO_DATA", raising=False)
     monkeypatch.setenv("NIMO_HOME", str(tmp_path / "nimo-home"))
-    assert default_data_root() == tmp_path / "nimo-home"
+    assert default_data_root() == tmp_path / "nimo-home" / "data"
     monkeypatch.setenv("NIMO_DATA", str(tmp_path / "explicit-data"))
     assert default_data_root() == tmp_path / "explicit-data"
 

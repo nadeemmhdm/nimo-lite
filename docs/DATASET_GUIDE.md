@@ -4,7 +4,7 @@ Nimo supports two dataset layers: the original reviewed sample manager and the s
 
 ## Open dataset downloader
 
-Large training datasets are **not bundled in the GitHub repository**. Install the optional downloader once:
+Large training datasets are **not bundled in the GitHub repository**. Standard Nimo bootstrap installs open-data support. For a manual editable install, use:
 
 ```bash
 python -m pip install -e '.[open-data]'
@@ -16,7 +16,7 @@ Then download the default quick mix with one command:
 nimo-data bootstrap
 ```
 
-Unless `NIMO_DATA` or `NIMO_HOME` is set, Nimo stores the dataset cache, imported corpus, provenance, and manifest under `~/.nimo-lite`. Re-running the command reuses the Hugging Face cache and Nimo's SHA-256 exact-deduplication, so already imported content is not inserted twice.
+Unless `NIMO_DATA` or `NIMO_HOME` is set, Nimo stores the dataset cache, imported corpus, provenance, and manifest under `~/.nimo-lite/data`. Re-running the command reuses the Hugging Face cache and Nimo's SHA-256 exact-deduplication, so already imported content is not inserted twice.
 
 ### Four selectable dataset types
 
@@ -41,7 +41,7 @@ nimo-data bootstrap --types code,math
 nimo-data bootstrap --types all
 ```
 
-Profiles control how many records are imported, not model size:
+Profiles control how many source examples are imported, not model size:
 
 ```bash
 nimo-data bootstrap --preset quick
@@ -69,10 +69,10 @@ The older `nimo-open-data` command remains an alias for compatibility.
 The downloader keeps remote dataset cache files under:
 
 ```text
-~/.nimo-lite/datasets-cache/
+~/.nimo-lite/data/datasets-cache/
 ```
 
-Nimo's imported/processed corpus and provenance remain under the selected Nimo data root. `~/.nimo-lite/open-data/manifest.json` records the last selected types, preset, cache path, dataset keys, licenses, import counts, and corpus statistics.
+Nimo's imported/processed corpus and provenance remain under the selected Nimo data root. `~/.nimo-lite/data/open-data/manifest.json` records the last selected types, preset, cache path, dataset keys, licenses, import counts, and corpus statistics.
 
 The repository itself does not receive downloaded dataset payloads. For manual development, `data/` is gitignored as an additional safeguard.
 
