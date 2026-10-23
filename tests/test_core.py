@@ -74,7 +74,7 @@ def test_dashboard_assets_are_cache_busted_and_missing_text_targets_are_guarded(
     app_js = (static / "app.js").read_text(encoding="utf-8")
     theme_js = (static / "theme.js").read_text(encoding="utf-8")
     runtime_js = (static / "runtime-enhancements.js").read_text(encoding="utf-8")
-    version = "20261023-domfix1"
+    version = "20261023-modelrecover1"
 
     for asset in ("theme.js", "style.css", "app.js"):
         assert f"/static/{asset}?v={version}" in html
