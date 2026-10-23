@@ -2,8 +2,8 @@
 
 Training keeps using NimoLMV2.forward(). This module installs an inference-only path with
 preallocated per-layer KV buffers, prompt-prefix reuse, optimized SDPA, low-overhead
-sampling, CPU thread tuning, tokenizer reuse, and measured runtime metrics. It never
-downloads weights.
+sampling, CPU thread tuning, tokenizer reuse, optional benchmark-gated torch.compile,
+and measured runtime metrics. It never downloads weights.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ _THREAD_TUNED = False
 _THREAD_INFO = {"selected": None, "candidates": {}}
 _TOKENIZER_CACHE: dict[str, object] = {}
 _TOKENIZER_CACHE_LOCK = threading.RLock()
+_COMPILE_MODES = {"auto", "on", "off"}
 
 
 def _device_name(model) -> str:
@@ -41,6 +42,11 @@ def _sync(device: str) -> None:
         torch.mps.synchronize()
 
 
+def _compile_mode() -> str:
+    requested = os.environ.get("NIMO_COMPILE", "auto").strip().lower() or "auto"
+    return requested if requested in _COMPILE_MODES else "auto"
+
+
 def tune_cpu_threads(force: bool = False) -> dict:
     """Small one-time local matmul benchmark; users can override with NIMO_INFERENCE_THREADS."""
     global _THREAD_TUNED, _THREAD_INFO
@@ -55,6 +61,7 @@ def tune_cpu_threads(force: bool = False) -> dict:
         return dict(_THREAD_INFO)
     try:
         import psutil
+
         physical = psutil.cpu_count(logical=False) or os.cpu_count() or 1
     except Exception:
         physical = os.cpu_count() or 1
@@ -71,7 +78,9 @@ def tune_cpu_threads(force: bool = False) -> dict:
             _ = a @ b
             samples = []
             for _ in range(2):
-                start = time.perf_counter(); _ = a @ b; samples.append(time.perf_counter() - start)
+                start = time.perf_counter()
+                _ = a @ b
+                samples.append(time.perf_counter() - start)
             timings[threads] = min(samples)
         chosen = min(timings, key=timings.get) if timings else previous
         torch.set_num_threads(chosen)
@@ -98,6 +107,7 @@ class LayerKV:
 
 class KVCache:
     """Batch-1 preallocated cache. No growing torch.cat is performed during decode."""
+
     def __init__(self, model):
         self.context = int(model.context)
         self.layers: list[LayerKV] = []
@@ -154,42 +164,61 @@ def _common_prefix(a: list[int], b: list[int]) -> int:
 
 class FastInferenceEngine:
     """Dedicated prefill/decode engine for one local Nimo model instance."""
+
     def __init__(self, model):
-        self.model = model
-        self.model.eval()
+        # Keep only a weak reference so clearing the runtime ModelCache can actually
+        # unload a model. WeakKeyDictionary values must not strongly retain their key.
+        self._model_ref = weakref.ref(model)
+        model.eval()
         self.device = _device_name(model)
         if self.device == "cpu":
             tune_cpu_threads()
         self.session = DecodeSession(KVCache(model))
         self.lock = threading.RLock()
         self.last_metrics = {}
+        self.compile_mode = _compile_mode()
+        self.compile_info = {
+            "requested": self.compile_mode,
+            "selected": "off",
+            "reason": "not evaluated yet",
+        }
+        self._compile_checked = False
+        self._compiled_forward = None
+
+    @property
+    def model(self):
+        model = self._model_ref()
+        if model is None:
+            raise RuntimeError("Nimo model was unloaded")
+        return model
 
     def reset(self) -> None:
         with self.lock:
             self.session.reset()
 
-    def _forward(self, token_ids: list[int] | torch.Tensor, start_pos: int) -> torch.Tensor:
+    def _forward_eager(self, token_ids: list[int] | torch.Tensor, start_pos: int) -> torch.Tensor:
         """Inference-only forward writing K/V directly into preallocated cache buffers."""
         from .models import _rope
 
+        model = self.model
         if isinstance(token_ids, torch.Tensor):
-            tokens = token_ids.to(device=next(self.model.parameters()).device, dtype=torch.long)
+            tokens = token_ids.to(device=next(model.parameters()).device, dtype=torch.long)
             if tokens.ndim == 1:
                 tokens = tokens.unsqueeze(0)
         else:
             tokens = torch.tensor(
-                [token_ids], device=next(self.model.parameters()).device, dtype=torch.long
+                [token_ids], device=next(model.parameters()).device, dtype=torch.long
             )
         batch, length = tokens.shape
         if batch != 1:
             raise ValueError("Fast inference path is optimized for batch size 1")
         end = start_pos + length
-        if end > self.model.context:
+        if end > model.context:
             raise ValueError("Input exceeds model context")
 
         positions = torch.arange(start_pos, end, device=tokens.device)
-        x = self.model.token(tokens)
-        for index, block in enumerate(self.model.blocks):
+        x = model.token(tokens)
+        for index, block in enumerate(model.blocks):
             attn = block.attn
             qkv = attn.qkv(block.norm1(x)).view(
                 1, length, 3, attn.heads, attn.head_dim
@@ -211,8 +240,8 @@ class FastInferenceEngine:
                     q, keys, values, dropout_p=0.0, is_causal=False
                 )
             else:
-                # Prefix extension needs an offset-causal mask. It is only length x end;
-                # single-token decode never allocates a causal mask.
+                # Prefix extension needs an offset-causal mask. Single-token decode
+                # never allocates a square causal mask.
                 key_pos = torch.arange(end, device=tokens.device)
                 query_pos = torch.arange(start_pos, end, device=tokens.device)
                 allowed = key_pos.unsqueeze(0) <= query_pos.unsqueeze(1)
@@ -224,7 +253,133 @@ class FastInferenceEngine:
             x = x + block.ff(block.norm2(x))
 
         self.session.cache.length = end
-        return self.model.head(self.model.norm(x))
+        return model.head(model.norm(x))
+
+    def _compile_candidate(self):
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("torch.compile unavailable")
+        return torch.compile(
+            self._forward_eager,
+            dynamic=True,
+            fullgraph=False,
+            mode="reduce-overhead",
+        )
+
+    def _ensure_compile(self) -> None:
+        """Resolve Auto/On/Off once per loaded model without blindly enabling compile."""
+        if self._compile_checked:
+            return
+        self._compile_checked = True
+        requested = self.compile_mode
+        if requested == "off":
+            self.compile_info = {"requested": requested, "selected": "off", "reason": "explicitly disabled"}
+            return
+
+        if requested == "auto" and self.device != "cuda":
+            # For Nimo's small batch-1 CPU/MPS path, compile startup can dominate a chat
+            # session. Never auto-enable without a measured backend-specific win.
+            self.compile_info = {
+                "requested": requested,
+                "selected": "off",
+                "reason": f"Auto compile benchmark is disabled on {self.device}; eager path retained",
+            }
+            return
+
+        try:
+            compiled = self._compile_candidate()
+        except Exception as exc:
+            self.compile_info = {
+                "requested": requested,
+                "selected": "off",
+                "reason": "compile unavailable",
+                "error": type(exc).__name__,
+            }
+            return
+
+        if requested == "on":
+            self._compiled_forward = compiled
+            self.compile_info = {
+                "requested": requested,
+                "selected": "on",
+                "reason": "explicit opt-in",
+            }
+            return
+
+        # Auto is intentionally benchmark-gated and currently only considered on CUDA.
+        model = self.model
+        vocab = max(9, int(getattr(model, "vocab_size", 512)))
+        probe = [min(vocab - 1, 8 + index) for index in range(4)]
+        try:
+            eager_samples = []
+            for _ in range(2):
+                self.session.reset()
+                start = time.perf_counter()
+                self._forward_eager(probe, 0)
+                _sync(self.device)
+                eager_samples.append(time.perf_counter() - start)
+
+            self.session.reset()
+            compile_start = time.perf_counter()
+            compiled(probe, 0)
+            _sync(self.device)
+            compile_first_s = time.perf_counter() - compile_start
+
+            compiled_samples = []
+            for _ in range(2):
+                self.session.reset()
+                start = time.perf_counter()
+                compiled(probe, 0)
+                _sync(self.device)
+                compiled_samples.append(time.perf_counter() - start)
+
+            eager_s = min(eager_samples)
+            compiled_s = min(compiled_samples)
+            speedup = eager_s / max(compiled_s, 1e-9)
+            use_compiled = speedup >= 1.08
+            self._compiled_forward = compiled if use_compiled else None
+            self.compile_info = {
+                "requested": "auto",
+                "selected": "on" if use_compiled else "off",
+                "eager_probe_s": eager_s,
+                "compiled_probe_s": compiled_s,
+                "steady_speedup": speedup,
+                "compile_first_call_s": compile_first_s,
+                "minimum_speedup": 1.08,
+            }
+        except Exception as exc:
+            self._compiled_forward = None
+            self.compile_info = {
+                "requested": "auto",
+                "selected": "off",
+                "reason": "compile benchmark fallback",
+                "error": type(exc).__name__,
+            }
+        finally:
+            self.session.reset()
+
+    def _run_forward(self, token_ids: list[int] | torch.Tensor, start_pos: int) -> torch.Tensor:
+        self._ensure_compile()
+        if self._compiled_forward is None:
+            return self._forward_eager(token_ids, start_pos)
+        try:
+            return self._compiled_forward(token_ids, start_pos)
+        except Exception as exc:
+            # A backend compile failure must never take local chat down. Rebuild the
+            # exact eager prefix before retrying so cache correctness is preserved.
+            prefix = list(self.session.tokens[:start_pos])
+            self._compiled_forward = None
+            self.compile_info = {
+                **self.compile_info,
+                "selected": "off",
+                "reason": "compiled execution fallback",
+                "error": type(exc).__name__,
+            }
+            self.session.reset()
+            if prefix:
+                prefix_logits = self._forward_eager(prefix, 0)
+                self.session.tokens.extend(prefix)
+                self.session.logits = prefix_logits[:, -1, :]
+            return self._forward_eager(token_ids, start_pos)
 
     def prefill(self, prompt_ids) -> tuple[torch.Tensor, dict]:
         """Process only the prompt suffix not already represented by the exact cache prefix."""
@@ -240,7 +395,6 @@ class FastInferenceEngine:
             self.session.reset()
         elif common < old_len:
             if common == len(ids):
-                # Recreate logits for a prompt that is an exact shorter prefix.
                 replay = max(0, common - 1)
                 self.session.cache.truncate(replay)
                 self.session.tokens = ids[:replay]
@@ -254,7 +408,7 @@ class FastInferenceEngine:
         suffix = ids[common:]
         started = time.perf_counter()
         if suffix:
-            logits = self._forward(suffix, common)
+            logits = self._run_forward(suffix, common)
             self.session.tokens.extend(suffix)
             self.session.logits = logits[:, -1, :]
         elif self.session.logits is None:
@@ -262,9 +416,9 @@ class FastInferenceEngine:
             prefix = ids[:-1]
             self.session.reset()
             if prefix:
-                self._forward(prefix, 0)
+                self._run_forward(prefix, 0)
                 self.session.tokens.extend(prefix)
-            logits = self._forward(replay, len(prefix))
+            logits = self._run_forward(replay, len(prefix))
             self.session.tokens.extend(replay)
             self.session.logits = logits[:, -1, :]
         _sync(self.device)
@@ -279,7 +433,7 @@ class FastInferenceEngine:
     def decode(self, token: int) -> torch.Tensor:
         """Decode one token without rebuilding or concatenating the prior K/V state."""
         position = self.session.cache.length
-        logits = self._forward([int(token)], position)
+        logits = self._run_forward([int(token)], position)
         self.session.tokens.append(int(token))
         self.session.logits = logits[:, -1, :]
         return self.session.logits
@@ -314,11 +468,7 @@ class FastInferenceEngine:
                         device=scores.device,
                         dtype=values.dtype,
                     )
-                    values = (
-                        values
-                        - float(frequency_penalty) * frequencies
-                        - float(presence_penalty)
-                    )
+                    values = values - float(frequency_penalty) * frequencies - float(presence_penalty)
                 scores.index_copy_(0, index, values)
 
         if temperature is None or temperature <= 0:
@@ -326,8 +476,6 @@ class FastInferenceEngine:
         temperature = max(float(temperature), 1e-5)
 
         if top_k:
-            # Apply nucleus sampling only to top-k candidates instead of sorting the
-            # complete vocabulary every decode step.
             k = min(int(top_k), scores.numel())
             values, indices = torch.topk(scores, k)
             probs = (values / temperature).softmax(-1)
@@ -345,9 +493,7 @@ class FastInferenceEngine:
             keep = sorted_probs.cumsum(-1) - sorted_probs <= float(top_p)
             sorted_probs = sorted_probs * keep
             sorted_probs = sorted_probs / sorted_probs.sum().clamp_min(1e-12)
-            return int(
-                sorted_ids[torch.multinomial(sorted_probs, 1, generator=generator)]
-            )
+            return int(sorted_ids[torch.multinomial(sorted_probs, 1, generator=generator)])
         return int(torch.multinomial(probs, 1, generator=generator))
 
     def generate_ids(
@@ -375,18 +521,12 @@ class FastInferenceEngine:
                 generator.manual_seed(int(seed))
             if deterministic:
                 temperature = 0.0
-            stop_ids = [
-                tokenizer.encode(sequence)
-                for sequence in (stop_sequences or [])
-                if sequence
-            ]
+            stop_ids = [tokenizer.encode(sequence) for sequence in (stop_sequences or []) if sequence]
             eos = tokenizer.special_id("EOS")
             pad = tokenizer.special_id("PAD")
             produced: list[int] = []
             counts = {}
-            max_steps = min(
-                int(limit), max(0, self.model.context - len(self.session.tokens))
-            )
+            max_steps = min(int(limit), max(0, self.model.context - len(self.session.tokens)))
             first_token_s = None
             decode_start = None
             decoded_steps = 0
@@ -411,35 +551,28 @@ class FastInferenceEngine:
                     break
                 produced.append(pred)
                 counts[pred] = counts.get(pred, 0) + 1
-                if any(
-                    stop and produced[-len(stop):] == stop
-                    for stop in stop_ids
-                ):
+                if any(stop and produced[-len(stop):] == stop for stop in stop_ids):
                     break
 
-                # Yield immediately. The next decode happens only when the consumer asks
-                # for another token, minimizing true time-to-first-visible-token.
+                # Yield before the next decode so visible first-token latency is real.
                 yield pred
                 logits = self.decode(pred)
                 decoded_steps += 1
 
             _sync(self.device)
             total = time.perf_counter() - overall
-            decode_elapsed = (
-                time.perf_counter() - decode_start if decode_start is not None else 0.0
-            )
+            decode_elapsed = time.perf_counter() - decode_start if decode_start is not None else 0.0
             self.last_metrics = {
                 **prefill,
                 "first_token_s": first_token_s,
                 "generation_s": total,
                 "decode_tokens": decoded_steps,
-                "decode_tokens_per_s": (
-                    decoded_steps / decode_elapsed if decode_elapsed > 0 else 0.0
-                ),
+                "decode_tokens_per_s": decoded_steps / decode_elapsed if decode_elapsed > 0 else 0.0,
                 "kv_cache_mb": self.session.cache.bytes / (1024 * 1024),
                 "device": self.device,
                 "torch_threads": torch.get_num_threads(),
                 "thread_tuning": dict(_THREAD_INFO),
+                "compile": dict(self.compile_info),
             }
 
 
@@ -503,11 +636,7 @@ def install_fast_inference() -> None:
     def fast_stream_generate(self, prompt_ids, tokenizer, **kwargs):
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         for token in fast_generate_ids(self, prompt_ids, tokenizer, **kwargs):
-            piece = (
-                tokenizer.tokens[token]
-                if token >= 8 and token < len(tokenizer.tokens)
-                else b""
-            )
+            piece = tokenizer.tokens[token] if token >= 8 and token < len(tokenizer.tokens) else b""
             text = decoder.decode(piece, final=False)
             if text:
                 yield text

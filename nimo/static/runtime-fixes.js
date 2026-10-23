@@ -126,6 +126,39 @@
     security.append(card);
   }
 
+  function addGenerationPresets() {
+    const tokens = document.getElementById('maxTokens');
+    if (!tokens || document.getElementById('responseLengthPreset')) return;
+
+    const select = document.createElement('select');
+    select.id = 'responseLengthPreset';
+    select.setAttribute('aria-label', 'Response length');
+    select.title = 'Response length';
+    select.innerHTML = '<option value="96">Short</option><option value="256" selected>Normal</option><option value="512">Detailed</option><option value="custom">Custom</option>';
+    select.onchange = () => {
+      if (select.value !== 'custom') tokens.value = select.value;
+    };
+    tokens.addEventListener('input', () => {
+      const value = String(tokens.value);
+      select.value = ['96', '256', '512'].includes(value) ? value : 'custom';
+    });
+    tokens.insertAdjacentElement('beforebegin', select);
+
+    const reasoning = document.getElementById('reasoningLevel');
+    if (reasoning) {
+      const labels = {
+        fast: 'Fast · low latency',
+        balanced: 'Balanced',
+        deep: 'Long context · deep',
+      };
+      for (const option of reasoning.options) {
+        if (labels[option.value]) option.textContent = labels[option.value];
+      }
+      reasoning.setAttribute('aria-label', 'Inference mode');
+      reasoning.title = 'Inference mode';
+    }
+  }
+
   function metric(label, value, detail = '') {
     const item = document.createElement('div');
     item.className = 'stat';
@@ -180,14 +213,20 @@
           return;
         }
         const q = m.quantization_decision || {};
+        const c = m.compile || {};
         const quant = q.selected || data.quantization || '—';
+        const firstToken = m.first_token_s == null ? '—' : format(Number(m.first_token_s) * 1000, 1, ' ms');
+        const compileDetail = c.requested
+          ? `requested ${c.requested}${c.steady_speedup ? ` · ${Number(c.steady_speedup).toFixed(2)}× probe` : ''}`
+          : 'compile policy not measured yet';
         grid.append(
           metric('Device', String(m.device || data.accelerator?.device || '—').toUpperCase(), `${m.dtype || ''} · ${quant}`),
           metric('Parameters', m.parameters ? `${(m.parameters / 1e6).toFixed(1)}M` : '—', `context ${m.context || '—'}`),
           metric('Prompt tokens', String(m.prompt_tokens ?? '—'), `${m.processed_prompt_tokens ?? '—'} processed · ${m.reused_prefix_tokens ?? 0} reused`),
-          metric('Model first token', format((m.first_token_s || 0) * 1000, 1, ' ms'), 'measured; excludes retrieval/tokenization'),
+          metric('Model first token', firstToken, 'measured; excludes retrieval/tokenization'),
           metric('Decode speed', format(m.decode_tokens_per_s, 1, ' tok/s'), `${m.decode_tokens ?? 0} decoded tokens`),
           metric('KV cache', format(m.kv_cache_mb, 1, ' MB'), 'preallocated per-layer cache'),
+          metric('Compile', String(c.selected || 'off').toUpperCase(), compileDetail),
           metric('Process RAM', format(m.process_ram_mb, 1, ' MB'), `${m.torch_threads ?? data.inference_threads ?? '—'} inference threads`),
           metric('VRAM', m.vram_allocated_mb == null ? '—' : format(m.vram_allocated_mb, 1, ' MB'), m.vram_reserved_mb == null ? 'CPU/MPS or unavailable' : `${format(m.vram_reserved_mb, 1, ' MB')} reserved`)
         );
@@ -213,6 +252,7 @@
 
   function enhance() {
     addUpdateControls();
+    addGenerationPresets();
     addInferencePerformancePanel();
     // Accessible state labels are text, not decorative emoji. Generated assistant
     // content is intentionally left unchanged because emoji may be semantically relevant.

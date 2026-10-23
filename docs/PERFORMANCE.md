@@ -8,7 +8,7 @@ Nimo measures performance instead of displaying hard-coded speed claims. The ben
 python -m nimo.benchmark --profile small --context 1024 --prompt-tokens 128 --new-tokens 24 --repeats 2 --output benchmark-results.json
 ```
 
-Use the same machine, model profile, context, precision, prompt size, output length and thread configuration when comparing changes. Add `--quantization auto` to measure the locally selected inference representation. The JSON result records platform, PyTorch version, model parameters, load time, prompt size, tokenizer throughput, first-token latency, prefill throughput, decode throughput, incremental-prefix reuse, current/peak resident memory and the quantization decision.
+Use the same machine, model profile, context, precision, prompt size, output length, compile policy and thread configuration when comparing changes. Add `--quantization auto` to measure the locally selected inference representation. Add `--compile off`, `--compile auto`, or `--compile on` when comparing PyTorch compilation on the same hardware. The JSON result records platform, PyTorch version, model parameters, load time, prompt size, tokenizer throughput, first-token latency, prefill throughput, decode throughput, incremental-prefix reuse, current/peak resident memory, quantization decision and compile decision.
 
 ## Recorded baseline before the inference rewrite
 
@@ -70,9 +70,10 @@ The current fast path keeps training unchanged and adds an inference-specific ba
 5. RoPE positions start at the current cache position, preserving cached/uncached numerical equivalence.
 6. The exact unchanged token prefix can be reused on the next turn. Changed history truncates to the exact common prefix; a new chat resets inference prefix state.
 7. The model object and tokenizer artifact are reused rather than reconstructed for every message.
-8. Generation runs under `torch.inference_mode()` with the model in evaluation mode.
-9. Sampling applies penalties only to tokens that have appeared and applies nucleus filtering to top-k candidates when top-k is enabled.
-10. Streaming yields the first generated token before computing the following decode step.
+8. The inference engine holds only a weak model reference, so changing/clearing the active model can actually release the old model RAM instead of being retained by the K/V engine registry.
+9. Generation runs under `torch.inference_mode()` with the model in evaluation mode.
+10. Sampling applies penalties only to tokens that have appeared and applies nucleus filtering to top-k candidates when top-k is enabled.
+11. Streaming yields the first generated token before computing the following decode step.
 
 ## Retrieval and memory
 
@@ -80,13 +81,13 @@ Local RAG and long-term memory use SQLite FTS5 indexes where the local SQLite bu
 
 ## CPU threads
 
-Inference threads are separate from training intent. Nimo accepts the environment override:
+Inference threads are separate from training intent. The launcher supports an explicit override:
 
 ```bash
-NIMO_INFERENCE_THREADS=4 nimo-run
+nimo-run --inference-threads 4
 ```
 
-Without an override, the inference engine runs a small one-time local microbenchmark across safe candidates such as 1, 2, 4 and the bounded physical-core count, then keeps the fastest candidate for the process. More threads are not assumed to be faster.
+The environment equivalent is `NIMO_INFERENCE_THREADS=4`. Without an override, the inference engine runs a small one-time local microbenchmark across safe candidates such as 1, 2, 4 and the bounded physical-core count, then keeps the fastest candidate for the process. More threads are not assumed to be faster.
 
 ## Quantization
 
@@ -94,21 +95,47 @@ Available inference choices remain `Auto`, `FP32`, `BF16`, `FP16` and `INT8` whe
 
 The probe is a safety/performance guard, not a substitute for full task-quality evaluation of a trained quantized checkpoint.
 
+## torch.compile policy
+
+Compilation is an explicit inference policy rather than a fake always-on speed switch:
+
+```bash
+nimo-run --compile auto
+nimo-run --compile on
+nimo-run --compile off
+```
+
+`NIMO_COMPILE=auto|on|off` provides the same setting for scripted launches.
+
+- `Off` always uses the eager optimized prefill/decode path.
+- `On` explicitly asks PyTorch to compile the inference forward path. The small invisible warmup absorbs the first compile call where possible. If the backend rejects compilation during execution, Nimo disables it, rebuilds the exact eager K/V prefix and continues instead of crashing the chat.
+- `Auto` never blindly turns compilation on. CPU and MPS currently retain eager mode because compile startup can dominate small batch-1 local models. On CUDA, Auto compares warmed eager and compiled probe latency and enables the compiled path only when the measured steady-state speedup is at least 1.08x. The compile decision and probe values are exposed in benchmark/runtime metrics.
+
+This policy can evolve as backend measurements improve; a compile mode is not called faster unless the local measurement supports it.
+
 ## Warmup and acceleration
 
-A tiny invisible warmup is performed after the final inference representation is selected. It can be disabled with `NIMO_WARMUP=0`. CUDA uses the compatible PyTorch SDPA backend and FP16/BF16 choices exposed by the runtime. Apple MPS uses supported PyTorch operations and falls back safely when acceleration is unavailable. Core inference remains fully local.
+A tiny invisible warmup is performed after the final inference representation is selected. Launcher controls are:
 
-`torch.compile` is intentionally not enabled automatically. Compilation can increase startup latency for small local models and the current optimized path has not demonstrated a repeatable measured benefit from enabling it. It should only become an automatic choice after a same-hardware benchmark proves a net benefit for the relevant backend and workload.
+```bash
+nimo-run --warmup auto
+nimo-run --warmup on
+nimo-run --warmup off
+```
+
+The environment fallback remains `NIMO_WARMUP=0` to disable warmup. CUDA uses the compatible PyTorch SDPA backend and FP16/BF16 choices exposed by the runtime. Apple MPS uses supported PyTorch operations and falls back safely when acceleration is unavailable. Core inference remains fully local.
 
 ## Context and generation
 
-Long prompts increase prefill latency and K/V memory. Nimo's existing Fast/Balanced/Deep reasoning modes bound output and evidence budgets, while the prompt builder preserves the system instruction and current user message under context pressure. Use Fast for latency-sensitive chat, Balanced for normal use, and a larger-context model/profile only when the extra context is needed.
+Long prompts increase prefill latency and K/V memory. Nimo's Fast/Balanced/Long-context-deep UI modes bound output and evidence budgets, while the prompt builder preserves the system instruction and current user message under context pressure. Use Fast for latency-sensitive chat, Balanced for normal use, and the long/deep mode or a larger-context model only when the extra evidence/context is needed.
+
+The chat composer also exposes response-length presets: `Short` (96 max tokens), `Normal` (256), and `Detailed` (512), while retaining the numeric max-token field for advanced custom values. Reasoning-mode safety caps still apply, so a response preset cannot silently bypass the active mode's configured maximum.
 
 Generation stops on EOS/PAD, configured stop sequences, the output token limit, or client cancellation. The streaming generator yields between decode steps so the UI Stop action can cancel promptly.
 
 ## Developer performance panel
 
-The existing Performance Monitor contains an optional collapsed inference developer panel. It shows measured values from the latest completed local generation rather than synthetic indicators: active device, dtype/quantization, parameter count, context, prompt/processed/reused tokens, model first-token latency, decode tokens/s, K/V cache memory, process RAM, inference threads, VRAM where available and the Auto quantization decision. Normal chat remains uncluttered.
+The existing Performance Monitor contains an optional collapsed inference developer panel. It shows measured values from the latest completed local generation rather than synthetic indicators: active device, dtype/quantization, parameter count, context, prompt/processed/reused tokens, model first-token latency, decode tokens/s, K/V cache memory, compile requested/selected state, process RAM, inference threads, VRAM where available and the Auto quantization decision. Missing measurements are displayed as `—`, never fabricated as zero latency/speed. Normal chat remains uncluttered.
 
 ## Correctness regressions
 
@@ -123,9 +150,11 @@ Performance changes are covered by tests for:
 - separate model cache sessions;
 - no model reload between repeated requests for the same active model;
 - model reload after an explicit model-cache clear/switch boundary;
+- inference-engine weak references allowing old model RAM to be released;
 - new-chat cache reset;
 - indexed RAG and memory retrieval;
-- explicit and Auto quantization loading.
+- explicit and Auto quantization loading;
+- compile Off correctness, CPU Auto conservative behavior and explicit On dispatch/fallback behavior.
 
 ## Interpreting results
 
