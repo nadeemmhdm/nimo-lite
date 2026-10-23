@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from PIL import Image
 from .hardware import hardware, accelerator
-from .models import ByteTokenizer, NimoLM, NimoVision, NimoIntent, load_model
+from .models import ByteTokenizer, NimoVision, NimoIntent, load_model, build_text_model, MODEL_PROFILES
 from .security import confined, safe_id
 from .store import Store, uid, now
 
@@ -26,7 +26,6 @@ def text_tensor(row, context, objective='answer_only_v2'):
     if objective=='full_sequence_v1':
         ids = ([tok.bos]+tok.encode('User: '+c['question']+'\nNimo: '+c['answer'])+[tok.eos])[:context+1]
         return torch.tensor(ids[:-1]),torch.tensor(ids[1:])
-    # Reserve at least half the sequence for the answer, and mask prompt targets.
     question = tok.encode(c['question'])[-max(1,context//2-16):]
     prefix = [tok.bos]+tok.encode('User: ')+question+tok.encode('\nNimo: ')
     answer = tok.encode(c['answer'])+[tok.eos]
@@ -74,10 +73,11 @@ def evaluate(model, rows, task, store, classes, device='cpu', batch_size=2, obje
     return result
 
 
-def start_job(store, task, epochs=5, resume=None, context=128):
+def start_job(store, task, epochs=5, resume=None, context=128, profile='micro'):
     if task not in ('text','image','intent') or not isinstance(epochs,int) or not 1<=epochs<=100:
         raise ValueError('Use text, image or intent, 1–100 epochs')
-    if context not in (128,256): raise ValueError('Context must be 128 or 256 bytes')
+    if context not in (128,256,512): raise ValueError('Context must be 128, 256 or 512 bytes')
+    if profile not in MODEL_PROFILES: raise ValueError('Unknown model profile')
     report = store.validate(task)
     if not report['valid']: raise ValueError('; '.join(report['errors']))
     hw = hardware(store.root)
@@ -89,7 +89,8 @@ def start_job(store, task, epochs=5, resume=None, context=128):
         if not (store.root/'models'/f'{resume}.pt').exists(): raise ValueError('Resume checkpoint missing')
     ident = uid()
     config = dict(epochs=epochs,batch_size=hw['batch_size'],seed=42,learning_rate=.03 if task=='intent' else .003,
-        context=context,objective='answer_only_v2',threads=hw['threads'],resume=resume,split=report['splits'])
+        context=context,objective='answer_only_v2',threads=hw['threads'],resume=resume,split=report['splits'],
+        profile=profile if task=='text' else None)
     with store.db() as db:
         db.execute('BEGIN IMMEDIATE')
         if db.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running','paused','stopping')").fetchone():
@@ -112,7 +113,7 @@ def run_job(root, ident):
     splits = {name:[rows[i] for i in ids] for name,ids in config['split'].items()}
     from .nlp import intent_label
     classes = sorted({r['content']['labels'][0] for r in splits['train']}) if task=='image' else sorted({intent_label(r) for r in splits['train']}) if task=='intent' else []
-    model = NimoLM(context=config['context']) if task=='text' else NimoVision(len(classes)) if task=='image' else NimoIntent(len(classes))
+    model = build_text_model(config.get('profile','micro'),config['context']) if task=='text' else NimoVision(len(classes)) if task=='image' else NimoIntent(len(classes))
     optimizer = torch.optim.AdamW(model.parameters(),lr=config['learning_rate'])
     start_epoch,start_offset = 0,0
     snapshot = [[r['id'],r['version'],r['checksum']] for group in splits.values() for r in group]
@@ -124,6 +125,7 @@ def run_job(root, ident):
         optimizer.load_state_dict(ck['optimizer'])
         config['objective']=ck['config'].get('objective','full_sequence_v1')
         config['context']=getattr(model,'context',128)
+        config['profile']=ck['config'].get('profile',config.get('profile','micro'))
         start_epoch,start_offset = ck['epoch'],ck.get('offset',0)
         torch.set_rng_state(ck['rng'])
         if start_epoch>=config['epochs']: raise ValueError('Resume total epochs must exceed checkpoint epoch')
@@ -132,7 +134,8 @@ def run_job(root, ident):
         for key,val in state.items():
             if isinstance(val,torch.Tensor): state[key]=val.to(device)
     bs = config['batch_size']; started=time.monotonic()
-    progress = dict(epoch=start_epoch,epochs=config['epochs'],batch=0,device=device,loss=None)
+    progress = dict(epoch=start_epoch,epochs=config['epochs'],batch=0,device=device,loss=None,
+                    profile=config.get('profile'),parameters=sum(p.numel() for p in model.parameters()))
     path=store.root/'models'/f'{ident}.pt'
     def status(state, **kwargs):
         progress.update(kwargs)
@@ -161,7 +164,7 @@ def run_job(root, ident):
         if hardware(root)['available_gb']<.5:
             save(epoch,offset); raise ValueError('Low RAM: checkpoint saved; stopped')
         return True
-    status('running',parameters=sum(p.numel() for p in model.parameters()))
+    status('running')
     baseline=evaluate(model,splits['validation'],task,store,classes,device,bs,config['objective'])
     with store.db() as db: active=db.execute('SELECT * FROM models WHERE active=1 AND task=?',(task,)).fetchone()
     previous=None
@@ -193,7 +196,8 @@ def run_job(root, ident):
     accepted=val['loss']<reference['loss'] and (task=='text' or val['accuracy']>=max(.5,reference['accuracy']))
     metrics=dict(validation=val,test=test,baseline_validation=baseline,previous_validation=previous,accepted=accepted,
         acceptance='Validation loss improves; classifier accuracy >= max(0.5, reference). Test does not select versions.',
-        duration_s=time.monotonic()-started,split=config['split'],dataset_versions={r['id']:r['version'] for r in rows.values()},seed=42,pretrained=False,objective=config['objective'],architecture=model.config)
+        duration_s=time.monotonic()-started,split=config['split'],dataset_versions={r['id']:r['version'] for r in rows.values()},seed=42,pretrained=False,objective=config['objective'],architecture=model.config,
+        profile=config.get('profile'))
     progress['validation']=val
     save(config['epochs'])
     with store.db() as db:
