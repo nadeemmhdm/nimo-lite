@@ -15,7 +15,11 @@ from nimo.hardware import hardware,accelerator
 
 
 def _load_sources():
-    paths=[Path('nimo/resources/assistant-basics.json'),Path('nimo/resources/general-basics.json')]
+    paths=[
+        Path('nimo/resources/assistant-basics.json'),
+        Path('nimo/resources/general-basics.json'),
+        Path('nimo/resources/world-history-basics.json'),
+    ]
     rows=[]
     hashes={}
     for path in paths:
@@ -57,14 +61,15 @@ def main():
         questions=[
             'Hello','Good morning','Who are you?','What is machine learning?',
             'What is 25 percent of 200?','What is an operating system?',
-            'How should I debug code?','What should an AI do when it is uncertain?',
+            'How should I debug code?','Who was Mahatma Gandhi?',
+            'What should an AI do when it is uncertain?',
             'What should an AI do when a question asks for today\'s information?'
         ]
         if row['task']=='intent':
             probes['intent']=[dict(question=q,**assistant_reply(model,ck,q)) for q in questions]
         else:
             probes['text']=[dict(question=q,answer=model.generate('User: '+q+'\nNimo: ',limit=192,temperature=0.2)) for q in questions]
-    report=dict(version='0.2.0',dataset='assistant-basics-v1 + general-basics-v1',examples=len(data),license='CC0-1.0',
+    report=dict(version='0.2.0',dataset='assistant-basics-v1 + general-basics-v1 + world-history-basics-v1',examples=len(data),license='CC0-1.0',
         source_sha256=source_hashes,profile=args.profile,context=args.context,hardware=hardware(root),accelerator=accelerator(),
         torch=torch.__version__,elapsed_s=time.monotonic()-start,models=runs,probes=probes,
         limitations='Small original educational corpus. Internal holdouts are not an external capability benchmark. Current facts still require web/tool verification.')
