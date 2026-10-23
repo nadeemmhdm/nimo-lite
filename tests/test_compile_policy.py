@@ -10,7 +10,7 @@ from nimo.models import NimoLMV2
 def _model():
     torch.manual_seed(73)
     return NimoLMV2(
-        vocab_size=256,
+        vocab_size=512,
         width=48,
         layers=2,
         heads=4,
